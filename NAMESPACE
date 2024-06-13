@@ -1,0 +1,5 @@
+exportPattern("^[[:alpha:]]+")
+importFrom("magrittr", "%>%")
+importFrom("grDevices", "dev.off", "svg")
+importFrom("utils", "write.csv","read.csv", "read.table","write.table")
+importFrom("stats", "complete.cases", "dist", "hclust", "median","time","rnorm","aov","t.test","p.adjust")

@@ -1,0 +1,32 @@
+Package: Analysis
+Type: Package
+Title: analysis of experiments
+Version: 0.1.0
+Author: Haifeng Zhu
+Maintainer: Haifeng Zhu <zhuhf77@mdanderson.org>
+Description: set up and run various analysis of experiemnts.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports: 
+    Assay,
+    assertthat,
+    BSgenome.Hsapiens.UCSC.hg19,
+    BulkExperiment,
+    ClassDiscovery,
+    clonevol,
+    ComplexHeatmap,
+    dplyr,
+    GenomeInfoDb,
+    grid,
+    maftools,
+    magrittr,
+    methods,
+    MutationalPatterns,
+    NMF,
+    purrr,
+    RColorBrewer,
+    survivalAnalysis,
+    tidyr,
+    utiltools
+RoxygenNote: 7.3.1
