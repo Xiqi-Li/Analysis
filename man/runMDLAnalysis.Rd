@@ -15,9 +15,12 @@ runMDLAnalysis(
   oncokb_cancer_genes_info,
   with_cosmic = T,
   cosmic_mutations,
+  include_mdl_only_samples = F,
+  include_cnv = F,
   top_anno,
   top_anno_sample_order,
   cancer_genes,
+  selected_genes = NULL,
   sample_order = NULL,
   save_analysis = F,
   output_dir,
@@ -44,11 +47,17 @@ runMDLAnalysis(
 
 \item{cosmic_mutations}{data.frame. cosmic mutation database.}
 
+\item{include_mdl_only_samples}{logic. whether include samples with only mdl mutations.}
+
+\item{include_cnv}{logic. whether include cnv in complex_oncoplot.}
+
 \item{top_anno}{HeatmapAnnotation. top annotation, passed to heatmap.}
 
 \item{top_anno_sample_order}{character. sample orders for top annotation.}
 
 \item{cancer_genes}{character. cancer gene list.}
+
+\item{selected_genes}{character. selected genes to show.}
 
 \item{sample_order}{character. sample order for complex onco plot.}
 

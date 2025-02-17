@@ -18,7 +18,7 @@ runAssayDeltaAnalysis(
   top_anno_patient_order,
   palette,
   test_method = c("ttest", "limma"),
-  contrasts = "SHORT-LONG",
+  contrasts,
   pval_cutoff = 0.05,
   run_go = FALSE,
   run_gsea = FALSE,
@@ -29,6 +29,7 @@ runAssayDeltaAnalysis(
   specialpathwaylists = specialpathwaylists,
   only_sig_genes = F,
   only_show_sig_genes = F,
+  specific_features = NULL,
   save_analysis = T,
   output_dir,
   log = "run assay delta analysis."
@@ -82,6 +83,8 @@ runAssayDeltaAnalysis(
 \item{only_sig_genes}{logic. whether only significant genes will be used.}
 
 \item{only_show_sig_genes}{logic. whether only significant genes will be showed in heatmap.}
+
+\item{specific_features}{character. plot specific features.}
 
 \item{save_analysis}{logic. whether to save results locally.}
 

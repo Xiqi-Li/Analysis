@@ -8,9 +8,12 @@ runMutationalMafAnalysis(
   obj,
   maftools_mutation_conversion_dict = NULL,
   cancer_genes,
+  cancerhallmarks = CosmicCancerGeneCensusHallmarks,
+  include_cnv = F,
   top_anno,
   top_anno_sample_order,
   sample_order = NULL,
+  selected_genes,
   pathways,
   group_column = NULL,
   group_terms = NULL,
@@ -27,11 +30,17 @@ runMutationalMafAnalysis(
 
 \item{cancer_genes}{character. cancer gene list.}
 
+\item{cancerhallmarks}{data.frame. hallmarks of cancer, from COSMIC.}
+
+\item{include_cnv}{logic. whether include cnv in complex_oncoplot.}
+
 \item{top_anno}{HeatmapAnnotation. top annotation, passed to heatmap.}
 
 \item{top_anno_sample_order}{character. sample orders for top annotation.}
 
 \item{sample_order}{character. oncoplot column order.}
+
+\item{selected_genes}{character. selected genes to show in oncoplot.}
 
 \item{pathways}{list. pathway list containing pathway name and corresponding genes.}
 

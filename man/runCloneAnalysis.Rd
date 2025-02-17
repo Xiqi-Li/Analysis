@@ -18,7 +18,7 @@ runCloneAnalysis(
   gene_locs,
   cancer_genes,
   smg_genes,
-  level = "arm",
+  driver_genes,
   pyclone_path = "/home/harryjerry/anaconda3/bin/pyclone-vi",
   save_analysis = F,
   output_dir,
@@ -44,13 +44,13 @@ runCloneAnalysis(
 
 \item{nonoverlapping_alt_counts_cutoff}{numeric. alt count cutoff for nonoverlapping mutations(Baseline and TP2).}
 
-\item{gene_locs}{data.frame. gene infomation}
+\item{gene_locs}{data.frame. gene information}
 
 \item{cancer_genes}{character. cancer gene list.}
 
 \item{smg_genes}{character. SMG gene list.}
 
-\item{level}{character. arm level, cytoband level.}
+\item{driver_genes}{character. potential driver genes.}
 
 \item{pyclone_path}{character. path to pyclone}
 
@@ -58,7 +58,7 @@ runCloneAnalysis(
 
 \item{output_dir}{character. output directory.}
 
-\item{log}{chracter. any comments.}
+\item{log}{character. any comments.}
 }
 \value{
 analysis. contain various contrast result.

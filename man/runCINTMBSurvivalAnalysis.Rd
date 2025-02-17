@@ -10,8 +10,10 @@ runCINTMBSurvivalAnalysis(
   variantstatisticsanalysis,
   CIN_column,
   TMB_column,
+  cosmic_TMB_column,
   cin_cutoff,
   tmb_cutoff,
+  cosmic_tmb_cutoff,
   survival_column,
   status_column,
   palette = c(High = "red", Low = "blue"),
@@ -23,15 +25,19 @@ runCINTMBSurvivalAnalysis(
 \arguments{
 \item{obj}{Analysis. analysis object to be run.}
 
-\item{variantstatisticsanalysis}{Analysis. variantstatisticsanalysis object.}
+\item{variantstatisticsanalysis}{Analysis. variantstatistics analysis object.}
 
 \item{CIN_column}{character. column for chromosome instability.}
 
-\item{TMB_column}{character. column for tumor mutation burdon.}
+\item{TMB_column}{character. column for tumor mutation burden.}
+
+\item{cosmic_TMB_column}{character. column for tumor cosmic mutation burden.}
 
 \item{cin_cutoff}{numeric. chromosome instability cutoff.}
 
-\item{tmb_cutoff}{chromosome instability cutoff.}
+\item{tmb_cutoff}{numeric.tumor burden cutoff.}
+
+\item{cosmic_tmb_cutoff}{numeric. cosmic tumor burden cutoff description}
 
 \item{survival_column}{character. column for survival days.}
 

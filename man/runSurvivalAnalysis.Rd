@@ -7,6 +7,8 @@ run survival analysis, including univariate/multivariate survival analysis, as w
 \usage{
 runSurvivalAnalysis(
   obj,
+  univariate_analysis = T,
+  multivariate_analysis = T,
   survival_column,
   status_column,
   covariate_columns,
@@ -20,6 +22,10 @@ runSurvivalAnalysis(
 }
 \arguments{
 \item{obj}{Analysis. analysis object to be run.}
+
+\item{univariate_analysis}{logic. run univariate survival analysis.}
+
+\item{multivariate_analysis}{logic. run multivariate survival analysis.}
 
 \item{survival_column}{character. column for survival days.}
 

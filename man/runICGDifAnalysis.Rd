@@ -21,7 +21,8 @@ runICGDifAnalysis(
   pval_cutoff = 0.05,
   save_analysis = T,
   output_dir,
-  log = "run immune checkpoint differential gene expression analysis."
+  log = "run immune checkpoint differential gene expression analysis.",
+  ...
 )
 }
 \arguments{
@@ -30,6 +31,8 @@ runICGDifAnalysis(
 \item{icg_info}{data.frame. immune checkpoint gene information}
 
 \item{gene_id_column}{character. gene ic column from icg_info}
+
+\item{score_method}{character. method passed to utiltools::geneset_activity, used for calculation of activity}
 
 \item{survival_column}{character. suvival days column from patient_info}
 
@@ -54,6 +57,8 @@ runICGDifAnalysis(
 \item{output_dir}{character. output directory.}
 
 \item{log}{chracter. any comments.}
+
+\item{...}{parameter passed to ComplexHeatmatp::Heatmap}
 }
 \value{
 analysis. contain various contrast result.
