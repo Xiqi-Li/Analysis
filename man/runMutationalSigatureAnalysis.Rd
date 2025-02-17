@@ -2,7 +2,7 @@
 % Please edit documentation in R/Analysis.R
 \name{runMutationalSigatureAnalysis}
 \alias{runMutationalSigatureAnalysis}
-\title{runMutationalSigatureAnalysis}
+\title{runMutationalSignatureAnalysis}
 \usage{
 runMutationalSigatureAnalysis(
   obj,

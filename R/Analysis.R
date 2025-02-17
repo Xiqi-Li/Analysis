@@ -33,6 +33,8 @@ setClass(
 #' run survival analysis, including univariate/multivariate survival analysis, as well as EIS
 #'
 #' @param obj Analysis. analysis object to be run.
+#' @param univariate_analysis logic. run univariate survival analysis.
+#' @param multivariate_analysis logic. run multivariate survival analysis.
 #' @param survival_column character. column for survival days.
 #' @param status_column character. column for survival status.
 #' @param covariate_columns character. column for covariate passed to univariate,multivariate analysis.
@@ -46,8 +48,8 @@ setClass(
 #' @return Analysis.
 #' @export
 #'
-setGeneric("runSurvivalAnalysis",function(obj,survival_column,status_column,covariate_columns,extra_covariates,palette,km_covariates=NULL,save_analysis=F,output_dir,log="run survival analysis,including univariant/multivariate analysis.") standardGeneric("runSurvivalAnalysis"))
-setMethod("runSurvivalAnalysis","Analysis",function(obj,survival_column,status_column,covariate_columns,extra_covariates,palette,km_covariates=NULL,save_analysis=F,output_dir,log="run survival analysis,including univariant/multivariate analysis"){
+setGeneric("runSurvivalAnalysis",function(obj,univariate_analysis=T,multivariate_analysis=T,survival_column,status_column,covariate_columns,extra_covariates,palette,km_covariates=NULL,save_analysis=F,output_dir,log="run survival analysis,including univariant/multivariate analysis.") standardGeneric("runSurvivalAnalysis"))
+setMethod("runSurvivalAnalysis","Analysis",function(obj,univariate_analysis=T,multivariate_analysis=T,survival_column,status_column,covariate_columns,extra_covariates,palette,km_covariates=NULL,save_analysis=F,output_dir,log="run survival analysis,including univariant/multivariate analysis"){
   stopifnot("for survival analysis, patient info should be provided"=!utiltools::is.empty.data.frame(obj@experiment@patient_info))
   if(save_analysis){
     if(missing(output_dir)){
@@ -58,7 +60,12 @@ setMethod("runSurvivalAnalysis","Analysis",function(obj,survival_column,status_c
   #browser()
   obj@output[["univariate"]]<-list()
   obj@output[["multivariate"]]<-list()
-  patient_info_<-merge(obj@experiment@sample_info,obj@experiment@patient_info,by="Patient_ID",all.x=T)
+  columns_<-c("Patient_ID",survival_column,status_column,covariate_columns)
+  patient_info_columns<-columns_[columns_ %in% colnames(obj@experiment@patient_info)]
+  sample_info_columns<-columns_[columns_ %in% colnames(obj@experiment@sample_info)]
+  patient_info_<-merge(obj@experiment@sample_info[,sample_info_columns,drop=F][complete.cases(obj@experiment@sample_info[,sample_info_columns,drop=F]),,drop=F],obj@experiment@patient_info[,patient_info_columns,drop=F],by="Patient_ID",all=T)
+  patient_info_<-patient_info_[,columns_]
+  patient_info_<-patient_info_[!duplicated(patient_info_),]
   stopifnot("Some variates are not in patient info!"=all(c(survival_column,status_column,covariate_columns) %in% colnames(patient_info_)))
   if(!is.null(km_covariates)){
     for(km_covariate in km_covariates){
@@ -97,43 +104,52 @@ setMethod("runSurvivalAnalysis","Analysis",function(obj,survival_column,status_c
   }
   covariates_<-setdiff(colnames(survival_data),c("Survival","Status"))
   #univariate
-  univariate_results<-lapply(covariates_, function(covariate){
-    res<-survivalAnalysis::analyse_multivariate(survival_data,dplyr::vars(Survival, Status),covariates = list(covariate))
-    return(res)})
-  univariate_forestplot<-survivalAnalysis::forest_plot(univariate_results,
-                                                       endpoint_labeller = c("time"=time),
-                                                       labels_displayed = c("endpoint", "factor", "n"),
-                                                       orderer = ~order(factor.name),
-                                                       ggtheme = ggplot2::theme_bw(base_size = 10),
-                                                       relative_widths = c(1, 1.5, 1))
-  univariate_results<-do.call(rbind,purrr::map(univariate_results,function(l) l[["summaryAsFrame"]]))
-  obj@output$univariate[["univariate_results"]]<-univariate_results
-  obj@output$univariate[["univariate_forestplot"]]<-univariate_forestplot
-
-  #multivariate
-  multivariate_results<-survivalAnalysis::analyse_multivariate(survival_data,dplyr::vars(Survival, Status),covariates = as.list(covariates_))
-  multivariate_forestplot<-survivalAnalysis::forest_plot(multivariate_results,
+  if(univariate_analysis){
+    univariate_results<-lapply(covariates_, function(covariate){
+      res<-survivalAnalysis::analyse_multivariate(survival_data,dplyr::vars(Survival, Status),covariates = list(covariate))
+      return(res)})
+    univariate_forestplot<-survivalAnalysis::forest_plot(univariate_results,
                                                          endpoint_labeller = c("time"=time),
                                                          labels_displayed = c("endpoint", "factor", "n"),
                                                          orderer = ~order(factor.name),
                                                          ggtheme = ggplot2::theme_bw(base_size = 10),
                                                          relative_widths = c(1, 1.5, 1))
-  multivariate_results<-multivariate_results[["summaryAsFrame"]]
-  obj@output$multivariate[["multivariate_results"]]<-multivariate_results
-  obj@output$multivariate[["multivariate_forestplot"]]<-multivariate_forestplot
+    univariate_results<-do.call(rbind,purrr::map(univariate_results,function(l) l[["summaryAsFrame"]]))
+    obj@output$univariate[["univariate_results"]]<-univariate_results
+    obj@output$univariate[["univariate_forestplot"]]<-univariate_forestplot
+    if(save_analysis){
+      dir.create(file.path(output_dir,"univariate"),recursive = T)
+      write.csv(obj@output$univariate[["univariate_results"]],file.path(output_dir,"univariate","univariate_results.csv"),row.names = F,quote = F)
+      svg(filename = file.path(output_dir,"univariate","univariate_forestplot.svg"),width = 12,height=10)
+      print(obj@output$univariate[["univariate_forestplot"]])
+      dev.off()
+    }
+  }
+
+
+  #multivariate
+  if(multivariate_analysis){
+    multivariate_results<-survivalAnalysis::analyse_multivariate(survival_data,dplyr::vars(Survival, Status),covariates = as.list(covariates_))
+    multivariate_forestplot<-survivalAnalysis::forest_plot(multivariate_results,
+                                                           endpoint_labeller = c("time"=time),
+                                                           labels_displayed = c("endpoint", "factor", "n"),
+                                                           orderer = ~order(factor.name),
+                                                           ggtheme = ggplot2::theme_bw(base_size = 10),
+                                                           relative_widths = c(1, 1.5, 1))
+    multivariate_results<-multivariate_results[["summaryAsFrame"]]
+    obj@output$multivariate[["multivariate_results"]]<-multivariate_results
+    obj@output$multivariate[["multivariate_forestplot"]]<-multivariate_forestplot
+    if(save_analysis){
+      dir.create(file.path(output_dir,"multivariate"),recursive = T)
+      write.csv(obj@output$multivariate[["multivariate_results"]],file.path(output_dir,"multivariate","multivariate_results.csv"),row.names = F,quote=F)
+      svg(filename = file.path(output_dir,"multivariate","multivariate_forestplot.svg"),width = 12,height=10)
+      print(obj@output$multivariate[["multivariate_forestplot"]])
+      dev.off()
+    }
+  }
 
   obj@log=paste(obj@log,"\n\n",Sys.time(),";\n\t",log,sep="")
   if(save_analysis){
-    dir.create(file.path(output_dir,"univariate"),recursive = T)
-    write.csv(obj@output$univariate[["univariate_results"]],file.path(output_dir,"univariate","univariate_results.csv"),row.names = F,quote = F)
-    svg(filename = file.path(output_dir,"univariate","univariate_forestplot.svg"),width = 12,height=10)
-    print(obj@output$univariate[["univariate_forestplot"]])
-    dev.off()
-    dir.create(file.path(output_dir,"multivariate"),recursive = T)
-    write.csv(obj@output$multivariate[["multivariate_results"]],file.path(output_dir,"multivariate","multivariate_results.csv"),row.names = F,quote=F)
-    svg(filename = file.path(output_dir,"multivariate","multivariate_forestplot.svg"),width = 12,height=10)
-    print(obj@output$multivariate[["multivariate_forestplot"]])
-    dev.off()
     cat(obj@log,file = file.path(output_dir,"log.txt"))
   }
   return(obj)
@@ -165,7 +181,7 @@ setMethod("runVariantStatisticsAnalysis","Analysis",function(obj,cosmic_tier12_c
       if(!dir.exists(output_dir)){dir.create(output_dir,recursive = T)}
     }
   }
-  DNA_samples<-obj@experiment@sample_info$Sample_ID[obj@experiment@sample_info$Assay=="DNA"]
+  DNA_samples<-obj@experiment@sample_info$Sample_ID[obj@experiment@sample_info$Assay=="WES"]
   filtered_mutations<-obj@experiment@snp_indel_assay@assay_data
   filtered_cd_mutations<-filtered_mutations[!filtered_mutations$Variant_Classification %in% c("3'UTR","5'UTR"),]
 
@@ -204,7 +220,7 @@ setMethod("runVariantStatisticsAnalysis","Analysis",function(obj,cosmic_tier12_c
   variant_statistic_table$nonSilent_cd_genetic_mutation_number<-nonSilent_genetic_mutation_number$nonSilent_mutation_number[match(DNA_samples,nonSilent_genetic_mutation_number$Tumor_Sample_Barcode)]
   nonSilent_oncokb_mutation_number<-filtered_cd_mutations %>% dplyr::filter(Hugo_Symbol %in% oncokb_cancer_genes$`Hugo Symbol`,Variant_Classification != "Silent") %>% dplyr::group_by(Tumor_Sample_Barcode) %>% dplyr::summarise(nonSilent_mutation_number=dplyr::n())
   variant_statistic_table$nonSilent_cd_oncokb_mutation_number<-nonSilent_oncokb_mutation_number$nonSilent_mutation_number[match(DNA_samples,nonSilent_oncokb_mutation_number$Tumor_Sample_Barcode)]
-  variant_statistic_table$nonSilent_cd_mutation_number<-variant_statistic_table$cd_mutation_number-variant_statistic_table$Silent
+  variant_statistic_table$nonSilent_cd_mutation_number<-variant_statistic_table$cd_mutation_number-ifelse(is.na(variant_statistic_table$Silent),0,variant_statistic_table$Silent)
   obj@output$variant_statistics<-variant_statistic_table
   obj@log=paste(obj@log,"\n\n",Sys.time(),";\n\t",log,sep="")
   if(save_analysis){
@@ -220,11 +236,13 @@ setMethod("runVariantStatisticsAnalysis","Analysis",function(obj,cosmic_tier12_c
 #' run survival analysis about chromosome instability and tumor mutation burdon
 #'
 #' @param obj Analysis. analysis object to be run.
-#' @param variantstatisticsanalysis Analysis. variantstatisticsanalysis object.
+#' @param variantstatisticsanalysis Analysis. variantstatistics analysis object.
 #' @param CIN_column character. column for chromosome instability.
-#' @param TMB_column character. column for tumor mutation burdon.
+#' @param TMB_column character. column for tumor mutation burden.
+#' @param cosmic_TMB_column character. column for tumor cosmic mutation burden.
 #' @param cin_cutoff numeric. chromosome instability cutoff.
-#' @param tmb_cutoff chromosome instability cutoff.
+#' @param tmb_cutoff numeric.tumor burden cutoff.
+#' @param cosmic_tmb_cutoff numeric. cosmic tumor burden cutoff description
 #' @param survival_column character. column for survival days.
 #' @param status_column character. column for survival status.
 #' @param palette character. colors for KM curve.
@@ -235,8 +253,8 @@ setMethod("runVariantStatisticsAnalysis","Analysis",function(obj,cosmic_tier12_c
 #' @return Analysis.
 #' @export
 #'
-setGeneric("runCINTMBSurvivalAnalysis",function(obj,variantstatisticsanalysis,CIN_column,TMB_column,cin_cutoff,tmb_cutoff,survival_column,status_column,palette=c("High"="red","Low"="blue"),save_analysis=F,output_dir,log="run cin and tmb survival analysis.") standardGeneric("runCINTMBSurvivalAnalysis"))
-setMethod("runCINTMBSurvivalAnalysis","Analysis",function(obj,variantstatisticsanalysis,CIN_column,TMB_column,cin_cutoff,tmb_cutoff,survival_column,status_column,palette=c("High"="red","Low"="blue"),save_analysis=F,output_dir,log="run cin and tmb survival analysis."){
+setGeneric("runCINTMBSurvivalAnalysis",function(obj,variantstatisticsanalysis,CIN_column,TMB_column,cosmic_TMB_column,cin_cutoff,tmb_cutoff,cosmic_tmb_cutoff,survival_column,status_column,palette=c("High"="red","Low"="blue"),save_analysis=F,output_dir,log="run cin and tmb survival analysis.") standardGeneric("runCINTMBSurvivalAnalysis"))
+setMethod("runCINTMBSurvivalAnalysis","Analysis",function(obj,variantstatisticsanalysis,CIN_column,TMB_column,cosmic_TMB_column,cin_cutoff,tmb_cutoff,cosmic_tmb_cutoff,survival_column,status_column,palette=c("High"="red","Low"="blue"),save_analysis=F,output_dir,log="run cin and tmb survival analysis."){
   if(save_analysis){
     if(missing(output_dir)){
       output_dir<-file.path(obj@project,obj@analysis_name)
@@ -247,7 +265,8 @@ setMethod("runCINTMBSurvivalAnalysis","Analysis",function(obj,variantstatisticsa
   message("TMB and CIN data come from variant statistics table, therefore please  run VariantStatistics analysis firstly!")
   cintmb_df<-data.frame(Sample_ID=variantstatisticsanalysis@output$variant_statistics[["Sample_ID"]],
                         CIN=variantstatisticsanalysis@output$variant_statistics[[CIN_column]],
-                        TMB=variantstatisticsanalysis@output$variant_statistics[[TMB_column]])
+                        TMB=variantstatisticsanalysis@output$variant_statistics[[TMB_column]],
+                        cosTMB=variantstatisticsanalysis@output$variant_statistics[[cosmic_TMB_column]])
   if(missing(cin_cutoff)){
     cintmb_df$CIN_Group=ifelse(variantstatisticsanalysis@output$variant_statistics[[CIN_column]]>median(variantstatisticsanalysis@output$variant_statistics[[CIN_column]],na.rm=T),"High","Low")
   } else {
@@ -258,6 +277,11 @@ setMethod("runCINTMBSurvivalAnalysis","Analysis",function(obj,variantstatisticsa
     cintmb_df$TMB_Group=ifelse(variantstatisticsanalysis@output$variant_statistics[[TMB_column]]>median(variantstatisticsanalysis@output$variant_statistics[[TMB_column]],na.rm=T),"High","Low")
   } else {
     cintmb_df$TMB_Group=ifelse(variantstatisticsanalysis@output$variant_statistics[[TMB_column]]>tmb_cutoff,"High","Low")
+  }
+  if(missing(cosmic_tmb_cutoff)){
+    cintmb_df$cosTMB_Group=ifelse(variantstatisticsanalysis@output$variant_statistics[[cosmic_TMB_column]]>median(variantstatisticsanalysis@output$variant_statistics[[cosmic_TMB_column]],na.rm=T),"High","Low")
+  } else {
+    cintmb_df$cosTMB_Group=ifelse(variantstatisticsanalysis@output$variant_statistics[[cosmic_TMB_column]]>cosmic_tmb_cutoff,"High","Low")
   }
 
   cintmb_df<-merge(cintmb_df,obj@experiment@sample_info[,c("Sample_ID","Patient_ID")],by="Sample_ID",all.x=T)
@@ -282,7 +306,7 @@ setMethod("runCINTMBSurvivalAnalysis","Analysis",function(obj,variantstatisticsa
   TMB_km_plot<-survivalAnalysis::kaplan_meier_plot(TMB_survival,
                                  break.time.by="breakByMonthYear",
                                  xlab="Survival (month)",
-                                 legend.title="CIN_Group",
+                                 legend.title="TMB_Group",
                                  hazard.ratio=TRUE,
                                  risk.table=TRUE,
                                  table.layout="clean",
@@ -290,11 +314,25 @@ setMethod("runCINTMBSurvivalAnalysis","Analysis",function(obj,variantstatisticsa
                                  palette=palette,
                                  legend=c(0.8,0.8))
 
+  cosTMB_survival<-cintmb_df %>% survivalAnalysis::analyse_survival(dplyr::vars(Survival,Status),by=cosTMB_Group)
+  cosTMB_km_plot<-survivalAnalysis::kaplan_meier_plot(cosTMB_survival,
+                                                   break.time.by="breakByMonthYear",
+                                                   xlab="Survival (month)",
+                                                   legend.title="cosmic_TMB_Group",
+                                                   hazard.ratio=TRUE,
+                                                   risk.table=TRUE,
+                                                   table.layout="clean",
+                                                   ggtheme=ggplot2::theme_bw(10),
+                                                   palette=palette,
+                                                   legend=c(0.8,0.8))
+
   obj@output$cintmb_df=cintmb_df
   obj@output$CIN_survival=CIN_survival
   obj@output$CIN_km_plot=CIN_km_plot
   obj@output$TMB_survival=TMB_survival
   obj@output$TMB_km_plot=TMB_km_plot
+  obj@output$cosmic_TMB_survival=cosTMB_survival
+  obj@output$cosmic_TMB_km_plot=cosTMB_km_plot
   obj@log=paste(obj@log,"\n\n",Sys.time(),";\n\t",log,sep="")
   if(save_analysis) {
     write.csv(obj@output$cintmb_df,file.path(output_dir,"cintmb.csv"),row.names = F,quote = F)
@@ -303,6 +341,9 @@ setMethod("runCINTMBSurvivalAnalysis","Analysis",function(obj,variantstatisticsa
     dev.off()
     svg(filename = file.path(output_dir,"tmb_km.svg"),width = 8,height=8)
     print(obj@output$TMB_km_plot)
+    dev.off()
+    svg(filename = file.path(output_dir,"cosmic_tmb_km.svg"),width = 8,height=8)
+    print(obj@output$cosmic_TMB_km_plot)
     dev.off()
     cat(obj@log,file=file.path(output_dir,"log.txt"))
   }
@@ -436,8 +477,8 @@ setMethod("runCNVAnalysis","Analysis",function(obj,
 
   mutations<-obj@experiment@snp_indel_assay@assay_data
   nonSilent_mutations<-mutations[(!mutations$Variant_Classification %in% c("Silent")) & (mutations$Tumor_Sample_Barcode %in% DNA_samples), ]
-  nonSilent_sig_mutations<-nonSilent_mutations[nonSilent_mutations$Hugo_Symbol %in% sig_genes$gene[sig_genes$q<=0.05 & sig_genes$nnon>=2],]
-
+  nonSilent_sig_mutations<-nonSilent_mutations[nonSilent_mutations$Hugo_Symbol %in% sig_genes$gene[sig_genes$p<=0.05 & sig_genes$nnon>=2],]
+  nonSilent_sig_mutations<-nonSilent_mutations[nonSilent_mutations$Hugo_Symbol %in% cosmic_tier12_cancer_genes$`Gene Symbol`,]
 
   cancer_gene_info<-data.frame(Symbol=cosmic_tier12_cancer_genes$`Gene Symbol`,
                                Chromosome=gsub(":.*","",cosmic_tier12_cancer_genes$`Genome Location`),
@@ -489,8 +530,267 @@ setMethod("runCNVAnalysis","Analysis",function(obj,
 }
 )
 
+#' runCNVDifAnalysis
+#'
+#' run CNV differential analysis
+#'
+#' @param obj Analysis. analysis object to be run.
+#' @param assay_name character. assay name.
+#' @param assay_type character. assay type, such as "DNA" or "RNA"
+#' @param level character. what level to call copynumber.
+#' @param scale logic. whether to scale assay.
+#' @param patient_id_column character. column for patient id.
+#' @param sample_id_column character. column for sample id.
+#' @param group_column character. column for group.
+#' @param block_column character. column for block.
+#' @param top_anno HeatmapAnnotation. top annotation, passed to heatmap.
+#' @param top_anno_sample_order character. patient orders for top annotation.
+#' @param palette character. colors for KM curve.
+#' @param test_method character. test method, such as "ttest" or "limma".
+#' @param contrasts character. specific contrast.
+#' @param pval_cutoff numeric. p value cutoff for significance.
+#' @param run_go logic. whether run go analysis.
+#' @param run_gsea logic. whether run gsea analysis.
+#' @param logFC_cutoff numeric. log fold change cutoff for signigicant genes.
+#' @param padj_cutoff numeric. adjusted p value cutoff for significance.
+#' @param cancergenes character. cancer gene list.
+#' @param pathwaylists list. pathway list.
+#' @param specialpathwaylists list. special pathway(geneset) list.
+#' @param only_sig_genes logic. whether only significant genes will be used.
+#' @param plot_specific_geneset logic. whether plot heatmap for specific genesets.
+#' @param specific_genesets character. names of specific geneset, if NULL, significant genesets will be plot.
+#' @param specific_features character. plot specific features.
+#' @param save_analysis logic. whether to save results locally.
+#' @param output_dir character. output directory, if is.null, use project/analysis_name as directory
+#' @param log character. any comments.
+#' @param ... list. parameter passed to difAnalysis.
+#'
+#' @return Analysis.
+#' @export
+#'
 
-#' runMutationalSigatureAnalysis
+setGeneric("runCNVDifAnalysis",function(obj,assay_name="cnv_assay",assay_type="WES",level="cytoband",scale,
+                                          patient_id_column="Patient_ID",sample_id_column="Sample_ID",group_column,block_column=NULL,
+                                          top_anno,top_anno_sample_order,palette=NULL,
+                                          test_method=c("ttest","limma"),contrasts=NULL,pval_cutoff = 0.05,
+                                          run_go=FALSE,run_gsea=FALSE,
+                                          logFC_cutoff = 1,padj_cutoff = 0.05,
+                                          cancergenes=cancergenes, pathwaylists=pathwaylists,specialpathwaylists=specialpathwaylists,
+                                          only_sig_genes=F,plot_specific_geneset=F,specific_genesets=NULL,
+                                          specific_features=NULL,
+                                          save_analysis = T,output_dir,
+                                          log="run assay differential analysis.",...) standardGeneric("runCNVDifAnalysis"))
+setMethod("runCNVDifAnalysis","Analysis",function(obj,assay_name="cnv_assay",assay_type="WES",level="cytoband",scale,
+                                                    patient_id_column="Patient_ID",sample_id_column="Sample_ID",group_column,block_column=NULL,
+                                                    top_anno,top_anno_sample_order,palette=NULL,
+                                                    test_method=c("ttest","limma"),contrasts=NULL,pval_cutoff = 0.05,
+                                                    run_go=FALSE,run_gsea=FALSE,
+                                                    logFC_cutoff = 1,padj_cutoff = 0.05,
+                                                    cancergenes=cancergenes, pathwaylists=pathwaylists,specialpathwaylists=specialpathwaylists,
+                                                    only_sig_genes=F,plot_specific_geneset=F,specific_genesets=NULL,
+                                                    specific_features=NULL,
+                                                    save_analysis = T,output_dir,
+                                                    log="run assay differential analysis.",...){
+  if(save_analysis){
+    if(missing(output_dir)){
+      output_dir<-file.path(obj@project,obj@analysis_name)
+      if(!dir.exists(output_dir)){dir.create(output_dir,recursive = T)}
+    }
+  } else {
+    output_dir<-getwd()
+  }
+  require(GenVisR)
+
+  if(level=="chromosome"){
+    boundaries<-as.data.frame(cytoGeno %>% dplyr::filter(genome=="hg19") %>% group_by(chromosome=chrom) %>% summarise(start=min(chromStart),end=max(chromEnd),pq_split=max(chromEnd[grepl("p",name)])))
+    boundaries$chromosome<-factor(gsub("chr","",boundaries$chromosome),levels=c(as.character(1:22),"X","Y"))
+    boundaries<-boundaries[order(boundaries$chromosome),]
+    boundaries$name<-paste("chr",boundaries$chromosome,sep="")
+  }
+  if(level=="arm"){
+    boundaries<-as.data.frame(cytoGeno %>% dplyr::filter(genome=="hg19") %>% group_by(chromosome=chrom,arm=substring(name,1,1)) %>% summarise(start=min(chromStart),end=max(chromEnd)))
+    boundaries$chromosome<-factor(gsub("chr","",boundaries$chromosome),levels=c(as.character(1:22),"X","Y"))
+    boundaries<-boundaries[order(boundaries$chromosome),]
+    boundaries$name=paste(paste("chr",boundaries$chromosome,sep=""),boundaries$arm,sep=":")
+  }
+  if(level=="cytoband"){
+    boundaries<-as.data.frame(cytoGeno %>% dplyr::filter(genome=="hg19") %>% group_by(chromosome=chrom,cytoband=gsub("\\..*","",name)) %>% summarise(start=min(chromStart),end=max(chromEnd)))
+    boundaries$chromosome<-factor(gsub("chr","",boundaries$chromosome),levels=c(as.character(1:22),"X","Y"))
+    boundaries<-boundaries[order(boundaries$chromosome),]
+    boundaries$name=paste(paste("chr",boundaries$chromosome,sep=""),boundaries$cytoband,sep=":")
+  }
+  if(level=="gband"){
+    boundaries<-as.data.frame(cytoGeno %>% dplyr::filter(genome=="hg19"))
+    boundaries<-boundaries[,1:4]
+    colnames(boundaries)<-c("chromosome","start","end","gband")
+    boundaries$chromosome<-factor(gsub("chr","",boundaries$chromosome),levels=c(as.character(1:22),"X","Y"))
+    boundaries<-boundaries[order(boundaries$chromosome),]
+    boundaries$name=paste(paste("chr",boundaries$chromosome,sep=""),boundaries$gband,sep=":")
+  }
+  if(level!="gene"){
+    boundaries_gr<-utiltools::df2granges(df = boundaries,genome = "hg19",seqlevelsStyle = "NCBI",simplified = T,xy=T,seqnames_col = "chromosome",start_col = "start",end_col = "end",meta_cols = c("cytoband","name"))
+    segments<-methods::slot(obj@experiment,assay_name)@assay_data
+    segments_gr<-df2grangelist(segments,genome = "hg19",seqlevelsStyle = "NCBI",simplified = T,xy=T,sample_col = "Sample_ID",seqnames_col = "chromosome",start_col = "start",end_col = "end",meta_cols = c("Sample_ID","probes","segmean"))
+    level_segments<-lapply(names(segments_gr),function(samp){
+      result<-as.data.frame(plyranges::join_overlap_intersect(segments_gr[[samp]],boundaries_gr)) %>% dplyr::group_by(name) %>% dplyr::summarise(coverage=sum(width)/width(boundaries_gr)[boundaries_gr$name==name],probes=sum(probes),segmean=log2(mean(2^segmean)))
+      result<-data.frame(Sample_ID=samp,result)
+      colnames(result)[match("name",colnames(result))]<-level
+      return(result)
+    })
+    level_segments<-do.call(rbind,level_segments)
+    level_segments<-as.data.frame(tidyr::pivot_wider(level_segments,id_cols=level,names_from = "Sample_ID",values_from = "segmean"))
+    level_segments<-utiltools::set_column_as_rownames(level_segments,level)
+  }
+
+  if(level=="gene"){
+    gene_segments_file<-file.path(methods::slot(obj@experiment,assay_name)@Gistic2_directory,"broad_data_by_genes.txt")
+    gene_segments<-read.table(gene_segments_file,header=T,stringsAsFactors = F,check.names = F,sep="\t")
+    gene_segments[["Gene Symbol"]]<-gsub("\\|chr","",gene_segments[["Gene Symbol"]],perl=T)
+    gene_segments[["Cytoband"]]<-gsub("([pq])","\\:\\1",paste("chr",gsub("\\..*","",gene_segments[["Cytoband"]],perl=T),sep=""),perl=T)
+    level_segments<-utiltools::set_column_as_rownames(gene_segments,"Gene Symbol")
+  }
+  if(missing(scale)){scale=F}
+  assay_samples<-top_anno_sample_order
+  sample_info<-obj@experiment@sample_info
+  sample_info<-sample_info[sample_info$Assay==assay_type,]
+  sample_info<-merge(sample_info,obj@experiment@patient_info,by=patient_id_column,all.x=T)
+  sample_info<-sample_info[match(assay_samples,sample_info[[sample_id_column]]),]
+
+  assay_data=level_segments[,assay_samples]
+
+  if(length(group_column)==1){
+    profile_group_<-sample_info[[group_column]]
+    if(any(is.na(profile_group_) | profile_group_=="")){
+      excluded_samples<-sample_info[["Sample_ID"]][is.na(profile_group_) | profile_group_==""]
+      sample_info=sample_info[-match(excluded_samples,sample_info[["Sample_ID"]]),]
+      assay_samples=assay_samples[-match(excluded_samples,assay_samples)]
+      top_anno<-top_anno[match(assay_samples,top_anno_sample_order)]
+      assertthat::are_equal(sample_info[["Sample_ID"]],assay_samples)
+      assay_data=assay_data[,assay_samples]
+    }
+  }
+  if(missing(palette)){palette=c("blue","white","red")}
+
+  if(is.null(contrasts)){
+    group_terms<-sort(unique(sample_info[[group_column]]))
+    contrasts=combinat::combn(group_terms,2,fun = function(items){paste(items,collapse="-")})
+  }
+  dif_analysis<-difAnalysis(assay=assay_data,scale=scale,assay_name=assay_name,
+                            sample_info=sample_info,patient_id_column=patient_id_column,sample_id_column=sample_id_column,group_column=group_column,block_column=block_column,contrasts=contrasts,
+                            top_anno=top_anno,top_anno_sample_order=assay_samples,
+                            test_method=test_method,pval_cutoff = pval_cutoff,
+                            only_sig_genes=only_sig_genes,palette=palette,
+                            output_dir=output_dir,...)
+
+  obj@output$dif_analysis<-dif_analysis
+  logFC_col="logFC"
+  pval_col="pvalue"
+  for(contrast in contrasts){
+
+    contrast_output_dir<-file.path(output_dir,contrast)
+    contrast_assay=dif_analysis[[contrast]][["contrast_assay"]]
+    groups=dif_analysis[[contrast]][["contrast_group"]]
+    contrast_statistics=dif_analysis[[contrast]][["contrast_results"]]
+    sig_assay=contrast_assay[contrast_statistics[[pval_col]]<=pval_cutoff,]
+    top_anno_<-top_anno[match(colnames(sig_assay),assay_samples)]
+    obj@output[[contrast]][["contrast_group"]]=groups
+    obj@output[[contrast]][["contrast_statistics"]]=contrast_statistics
+    obj@output[[contrast]][["sig_assay"]]=sig_assay
+    if(run_go) {
+      go_output_dir<-file.path(contrast_output_dir,"GO")
+      if(!dir.exists(go_output_dir)){dir.create(go_output_dir,recursive = T)}
+      go<-utiltools::goEnrich(statistics = contrast_statistics,pval_col = pval_col,logFC_col = logFC_col,pval_cutoff = pval_cutoff,logFC_cutoff = logFC_cutoff,padj_cutoff = padj_cutoff,output_dir = go_output_dir)
+      obj@output[[contrast]]$go<-go
+    }
+
+    if(run_gsea){
+      for(pathwayset in names(pathwaylists)){
+        pathways<-pathwaylists[[pathwayset]]
+        specialpathways<-specialpathwaylists[[pathwayset]]
+        pathwayset_output_dir<-file.path(contrast_output_dir,pathwayset)
+        if(!dir.exists(pathwayset_output_dir)){dir.create(pathwayset_output_dir,recursive = T)}
+        gsea_res<-utiltools::gsea(contrast_statistics,pval_cutoff = pval_cutoff,FC_cutoff = logFC_cutoff,output_dir = pathwayset_output_dir,logFC_col = logFC_col,pval_col = pval_col,pathways = pathways)
+        obj@output[[contrast]][[pathwayset]][["gsea"]]<-gsea_res
+        selected_pathways<-pathways[intersect(names(gsea_res$sig_pathways),specialpathways)]
+        if(length(selected_pathways)!=0){
+          pathway_colors<-RColorBrewer::brewer.pal(length(selected_pathways),"Paired")[1:length(selected_pathways)]
+          names(pathway_colors)<-names(selected_pathways)
+          if(save_analysis){
+            svg(filename = file.path(pathwayset_output_dir,"volcano_plot.svg"),width = 10,height=10)
+            volcano_plot<-utiltools::ggvolcano(contrast_statistics,x_col=logFC_col,y_col = pval_col,pathways =selected_pathways,pathway_colors = pathway_colors,cancergenes = cancergenes,ylab = "pvalue",FC_Cutoff = 1)
+            obj@output[[contrast]][[pathwayset]][["volcano_plot"]]=volcano_plot
+            dev.off()
+          }
+
+          pathway_gene_table_<-gsea_res$pathway_gene_table
+          if(save_analysis){
+            svg(filename = file.path(pathwayset_output_dir,"gseaheatmap.svg"),width = 20,height=12)
+            gseaheatmap<-utiltools::gsea_heatmap(sig_expressions = t(scale(t(sig_assay))),name="differential assay",scale = F,pathway_gene_table = pathway_gene_table_,pathway_font_size = 3,pathway_gene_heatmap_width = grid::unit(8,'cm'),top_annotation=top_anno_,column_split=groups,show_column_dend=F,show_row_names=F,use_raster=T)
+            obj@output[[contrast]][[pathwayset]][["gseaheatmap"]]=gseaheatmap
+            dev.off()
+          }
+          if(save_analysis){
+            svg(filename = file.path(pathwayset_output_dir,"sankeyheatmap.svg"),width = 20,height=12)
+            sankeyheatmap<-utiltools::sankey_heatmap(sig_expressions = t(scale(t(sig_assay))),name="differential assay",scale = F,keep_other = F,pathways = selected_pathways,pathway_colors = pathway_colors,top_annotation=top_anno_,column_split=groups,show_column_dend=F,show_row_names=F,line_size = 3,text_size = 8)
+            obj@output[[contrast]][[pathwayset]][["sankeyheatmap"]]=sankeyheatmap
+            dev.off()
+          }
+          if(save_analysis){
+            if(plot_specific_geneset){
+              if(is.null(specific_genesets)){
+                specific_genesets_<-names(gsea_res$sig_pathways)
+              } else{specific_genesets_=specific_genesets}
+              for(specific_geneset in specific_genesets_){
+                specific_geneset_dir<-file.path(pathwayset_output_dir,"specific_genesets",specific_geneset)
+                if(!dir.exists(specific_geneset_dir)){dir.create(specific_geneset_dir,recursive = T)}
+                specific_geneset_assay<-contrast_assay[intersect(gsea_res$sig_pathways[[specific_geneset]],rownames(contrast_assay)),,drop=F]
+                write.csv(specific_geneset_assay,file=file.path(specific_geneset_dir,"assay.csv"))
+                specific_geneset_row_anno_pvalue=-log10(contrast_statistics[rownames(specific_geneset_assay),"pvalue"])
+                specific_geneset_row_anno<-ComplexHeatmap::rowAnnotation(`-log10(P)`=ComplexHeatmap::anno_barplot(specific_geneset_row_anno_pvalue,gp=gpar(col=ifelse(specific_geneset_row_anno_pvalue>(-log10(0.05)),"red","green"))),annotation_name_side = "bottom")
+                specific_geneset_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(specific_geneset_assay))),name="zscore",top_annotation=top_anno_,right_annotation = specific_geneset_row_anno,column_split=groups,show_column_dend=F,show_row_names=T,row_names_gp = gpar(fontsize=5))
+                svg(filename = file.path(specific_geneset_dir,"heatmap.svg"),width = 20,height=20)
+                print(specific_geneset_heatmap)
+                dev.off()
+              }
+            }
+          }
+        } else {
+          if(save_analysis){
+            svg(filename = file.path(pathwayset_output_dir,"volcano_plot.svg"),width = 10,height=10)
+            volcano_plot<-utiltools::ggvolcano(contrast_statistics,x_col=logFC_col,y_col = pval_col,cancergenes = cancergenes,ylab = "pvalue",FC_Cutoff = 1)
+            obj@output[[contrast]][[pathwayset]][["volcano_plot"]]=volcano_plot
+            dev.off()
+          }
+        }
+      }
+    }
+    if(save_analysis){
+      if(!dir.exists(contrast_output_dir)){dir.create(contrast_output_dir,recursive = T)}
+      write.csv(sig_assay,file.path(contrast_output_dir,"sig_assay.csv"),row.names = T)
+      write.csv(contrast_statistics,file.path(contrast_output_dir,"combined_statistics.csv"),row.names = T)
+    }
+  }
+  if(!is.null(specific_features)){
+    assertthat::are_equal(colnames(assay_data),sample_info[[sample_id_column]])
+    contrasts_<-lapply(contrasts,function(contr){unlist(strsplit(contr,"-"))})
+    features_df<-data.frame(as.data.frame(t(assay_data[specific_features,,drop=F])),sample_info[,c(group_column,block_column),drop=F])
+    if(!is.null(block_column)){features_df<-features_df[order(features_df[[group_column]],features_df[[block_column]]),];paired=T} else{paired=F}
+    features_df<-tidyr::pivot_longer(features_df,cols=specific_features,names_to="Feature",values_to = "Score")
+    features_p<-ggpubr::ggboxplot(features_df,x=group_column,y="Score",color = group_column, palette = "jco", add = "jitter",facet.by = "Feature")+ggpubr::stat_compare_means(method = "t.test",comparisons = contrasts_,paired = paired,label="")
+    obj@output$features_plot=features_p
+    if(save_analysis){
+      ggplot2::ggsave(filename = file.path(output_dir,"features_plot.svg"),plot = features_p,width = 20,height=8)
+    }
+  }
+
+  obj@log=paste(obj@log,"\n\n",Sys.time(),";\n\t",log,sep="")
+
+  return(obj)
+}
+)
+
+
+#' runMutationalSignatureAnalysis
 #'
 #' run analysis about mutational signature (snp)
 #'
@@ -517,6 +817,7 @@ setMethod("runMutationalSigatureAnalysis","Analysis",function(obj,top_anno,top_a
       if(!dir.exists(output_dir)){dir.create(output_dir,recursive = T)}
     }
   }
+
   DNA_samples<-top_anno_sample_order
   mutations=obj@experiment@snp_indel_assay@assay_data
   mutations<-mutations[mutations$Variant_Type=="SNP",]
@@ -539,8 +840,8 @@ setMethod("runMutationalSigatureAnalysis","Analysis",function(obj,top_anno,top_a
       profile_group<-profile_group_
     }
   }
+  sample_order=sample_info[["Sample_ID"]][order(profile_group)]
   mutations$Tumor_Sample_Barcode<-factor(mutations$Tumor_Sample_Barcode,levels=DNA_samples)
-
   mutations_grl<- utiltools::df2grangelist(mutations,genome="hg19",seqlevelsStyle = "NCBI",simplified = F,xy=T,sample_col = "Tumor_Sample_Barcode",seqnames_col = "Chromosome",start_col = "Start_position",end_col = "End_position",strand_col = "Strand",meta_cols = c("REF","ALT","Hugo_Symbol"))
   genome<-BSgenome.Hsapiens.UCSC.hg19::BSgenome.Hsapiens.UCSC.hg19
   snv_grl <- MutationalPatterns::get_mut_type(mutations_grl, type = "snv")
@@ -560,24 +861,36 @@ setMethod("runMutationalSigatureAnalysis","Analysis",function(obj,top_anno,top_a
   require(NMF)
   estimate <- NMF::nmf(mut_mat, rank = 2:5, method = "brunet", nrun = 10, seed = 123456, .opt = "v-p")
   estimate_plot<-plot(estimate)
-
-
   mut_mat_ <- mut_mat + 0.0001
   nmf_res <- MutationalPatterns::extract_signatures(mut_mat_, rank = rank, nrun = nrun, single_core = TRUE)
-  signatures = MutationalPatterns::get_known_signatures()
+  #signatures = MutationalPatterns::get_known_signatures()
+  signatures=cosmicsig::COSMIC_v3.0$signature$GRCh37$SBS96
   nmf_res <- MutationalPatterns::rename_nmf_signatures(nmf_res, signatures, cutoff = cutoff)
   profile96_plot<-MutationalPatterns::plot_96_profile(nmf_res$signatures, condensed = TRUE)
   contribution_barplot<-MutationalPatterns::plot_contribution(nmf_res$contribution, nmf_res$signature,mode = "relative")
   contribution_heatmap<-MutationalPatterns::plot_contribution_heatmap(nmf_res$contribution, cluster_samples = TRUE,cluster_sigs = TRUE)
-
+  signatures_<-data.frame(t(signatures))
+  colnames(signatures_)<-colnames(deconstructSigs::signatures.cosmic)
+  signature_weights<-lapply(colnames(mut_mat),function(samp){
+    samp_signature_weights<-deconstructSigs::whichSignatures(tumor.ref = as.data.frame(t(mut_mat)),
+                                                              signatures.ref = signatures_,
+                                                              sample.id = samp,
+                                                              contexts.needed = TRUE,
+                                                              tri.counts.method = 'default')
+    return(samp_signature_weights$weights)
+  })
+  signature_weights<-data.frame(t(do.call(rbind,signature_weights)),check.names = F)
+  signature_weights<-signature_weights[rowSums(signature_weights!=0)!=0,DNA_samples,drop=F]
+  assertthat::are_equal(colnames(signature_weights),DNA_samples)
+  col=circlize::colorRamp2(c(0,1),c("white","blue"))
+  signature_weight_heatmap<-ComplexHeatmap::Heatmap(signature_weights,name="signature_weight",col=col,top_annotation = top_anno,column_order = sample_order,height=grid::unit(4,'cm'),row_names_gp=gpar(fontsize=5))
 
   rel_contribution<-t(t(nmf_res$contribution)/colSums(nmf_res$contribution))[,DNA_samples]
-  col=circlize::colorRamp2(c(0,1),c("white","blue"))
   assertthat::are_equal(colnames(rel_contribution),DNA_samples)
-  rel_heatmap<-ComplexHeatmap::Heatmap(rel_contribution,name="relative_contribution",col=col,top_annotation = top_anno,height=grid::unit(4,'cm'))
+  rel_heatmap<-ComplexHeatmap::Heatmap(rel_contribution,name="relative_contribution",col=col,top_annotation = top_anno,column_order = sample_order,height=grid::unit(4,'cm'))
 
   cos_sim_samples_signatures <- t(MutationalPatterns::cos_sim_matrix(mut_mat, signatures))[,DNA_samples]
-  cos_sim_samples_signature_heatmap<-ComplexHeatmap::Heatmap(cos_sim_samples_signatures,col=col,top_annotation = top_anno)
+  cos_sim_samples_signature_heatmap<-ComplexHeatmap::Heatmap(cos_sim_samples_signatures,col=col,top_annotation = top_anno,column_order = sample_order)
 
   obj@output$snv=snv_grl
   obj@output$type_occurrences<-type_occurrences
@@ -593,6 +906,8 @@ setMethod("runMutationalSigatureAnalysis","Analysis",function(obj,top_anno,top_a
   obj@output$contribution_heatmap<-contribution_heatmap
   obj@output$relative_contribution<-rel_contribution
   obj@output$relative_contribution_heatmap<-rel_heatmap
+  obj@output$signature_weights<-signature_weights
+  obj@output$signature_weight_heatmap<-signature_weight_heatmap
   obj@output$cos_sim_samples_signatures<-cos_sim_samples_signatures
   obj@output$cos_sim_samples_signature_heatmap<-cos_sim_samples_signature_heatmap
   obj@log=paste(obj@log,"\n\n",Sys.time(),";\n\t",log,sep="")
@@ -616,6 +931,9 @@ setMethod("runMutationalSigatureAnalysis","Analysis",function(obj,top_anno,top_a
     dev.off()
     svg(filename = file.path(output_dir,"contribution_barplot.svg"),width = 8,height=8)
     print(contribution_barplot)
+    dev.off()
+    svg(filename = file.path(output_dir,"signature_weight_heatmap.svg"),width = 8,height=8)
+    print(signature_weight_heatmap)
     dev.off()
     svg(filename = file.path(output_dir,"contribution_heatmap.svg"),width = 8,height=8)
     print(contribution_heatmap)
@@ -642,9 +960,12 @@ setMethod("runMutationalSigatureAnalysis","Analysis",function(obj,top_anno,top_a
 #' @param obj Analysis. analysis object to be run.
 #' @param maftools_mutation_conversion_dict data.frame. dictionary of cgl mutation to maftools compatible mutation.
 #' @param cancer_genes character. cancer gene list.
+#' @param cancerhallmarks data.frame. hallmarks of cancer, from COSMIC.
+#' @param include_cnv logic. whether include cnv in complex_oncoplot.
 #' @param top_anno HeatmapAnnotation. top annotation, passed to heatmap.
 #' @param top_anno_sample_order character. sample orders for top annotation.
 #' @param sample_order character. oncoplot column order.
+#' @param selected_genes character. selected genes to show in oncoplot.
 #' @param pathways list. pathway list containing pathway name and corresponding genes.
 #' @param group_column character. group column needed compare two diffenrent cohorts
 #' @param group_terms character. group terms needed for comparisons.
@@ -656,8 +977,8 @@ setMethod("runMutationalSigatureAnalysis","Analysis",function(obj,top_anno,top_a
 #' @return Analysis.
 #' @export
 #'
-setGeneric("runMutationalMafAnalysis",function(obj,maftools_mutation_conversion_dict=NULL,cancer_genes,top_anno,top_anno_sample_order,sample_order=NULL,pathways,group_column=NULL,group_terms=NULL,save_analysis=F,output_dir,log="run mutational maf analysis.",...) standardGeneric("runMutationalMafAnalysis"))
-setMethod("runMutationalMafAnalysis","Analysis",function(obj,maftools_mutation_conversion_dict,cancer_genes,top_anno,top_anno_sample_order,sample_order=NULL,pathways,group_column=NULL,group_terms=NULL,save_analysis=F,output_dir,log="run mutational maf analysis.",...){
+setGeneric("runMutationalMafAnalysis",function(obj,maftools_mutation_conversion_dict=NULL,cancer_genes,cancerhallmarks=CosmicCancerGeneCensusHallmarks,include_cnv=F,top_anno,top_anno_sample_order,sample_order=NULL,selected_genes,pathways,group_column=NULL,group_terms=NULL,save_analysis=F,output_dir,log="run mutational maf analysis.",...) standardGeneric("runMutationalMafAnalysis"))
+setMethod("runMutationalMafAnalysis","Analysis",function(obj,maftools_mutation_conversion_dict,cancer_genes,cancerhallmarks=CosmicCancerGeneCensusHallmarks,include_cnv=F,top_anno,top_anno_sample_order,sample_order=NULL,selected_genes,pathways,group_column=NULL,group_terms=NULL,save_analysis=F,output_dir,log="run mutational maf analysis.",...){
 
   if(save_analysis){
     if(missing(output_dir)){
@@ -668,11 +989,12 @@ setMethod("runMutationalMafAnalysis","Analysis",function(obj,maftools_mutation_c
     output_dir<-getwd()
   }
   DNA_samples<-top_anno_sample_order
-  sample_info<-merge(merge(data.frame(Sample_ID=DNA_samples),obj@experiment@sample_info[,c("Sample_ID","Patient_ID")],by="Sample_ID",all.x=T),obj@experiment@patient_info,by="Patient_ID",all.x=T)
+  sample_info<-merge(merge(data.frame(Sample_ID=DNA_samples),obj@experiment@sample_info[,c("Sample_ID","Patient_ID",setdiff(colnames(obj@experiment@sample_info),c("Sample_ID",colnames(obj@experiment@patient_info))))],by="Sample_ID",all.x=T),obj@experiment@patient_info,by="Patient_ID",all.x=T)
   sample_info$Tumor_Sample_Barcode<-sample_info$Sample_ID
 
   write.csv(sample_info,file=file.path(output_dir,"sample_info.tsv"),row.names = F)
   mutations=obj@experiment@snp_indel_assay@assay_data
+  mutations$Hugo_Symbol<-gsub(";.*","",mutations$Hugo_Symbol)
   if(!is.null(maftools_mutation_conversion_dict)){
     mutations$Variant_Classification<-unname(maftools_mutation_conversion_dict[mutations$Variant_Classification])
     mutations<-mutations[mutations$Variant_Classification %in% maftools_mutation_conversion_dict,]
@@ -682,8 +1004,8 @@ setMethod("runMutationalMafAnalysis","Analysis",function(obj,maftools_mutation_c
   mutations$Tumor_Sample_Barcode<-factor(mutations$Tumor_Sample_Barcode,levels=DNA_samples)
   write.table(mutations,file=file.path(output_dir,"mutations.maf"),row.names = F,col.names = T,sep="\t",quote = F)
   maf = maftools::read.maf(maf = file.path(output_dir,"mutations.maf"),
-                 clinicalData = file.path(output_dir,"sample_info.tsv"),
-                 verbose = FALSE)
+                           clinicalData = file.path(output_dir,"sample_info.tsv"),
+                           verbose = FALSE)
   if(!is.null(sample_order)){
     top_anno<-top_anno[match(sample_order,DNA_samples),]
     DNA_samples<-sample_order
@@ -691,31 +1013,66 @@ setMethod("runMutationalMafAnalysis","Analysis",function(obj,maftools_mutation_c
     sample_info<-sample_info[match(DNA_samples,sample_info$Tumor_Sample_Barcode),]
   }
 
-
+  #cancerhallmarks
+  cancerhallmarks<-cancerhallmark_heatmap(assay=mutations,sample_id_col = "Tumor_Sample_Barcode",value_col = "Variant_Classification",top_anno = top_anno,top_anno_sample_order = DNA_samples,column_order=sample_order)
+  svg(filename = file.path(output_dir,"cancerhallmarks.svg"),width = 10,height=15)
+  ComplexHeatmap::draw(cancerhallmarks$heatmap_plot)
+  obj@output$cancerhallmarks_heatmap_plot=file.path(output_dir,"cancerhallmarks.svg")
+  obj@output$cancerhallmarks_heatmap_matrix<-cancerhallmarks$heatmap_matrix
+  dev.off()
   #oncosummary
   svg(filename = file.path(output_dir,"oncosummary.svg"),width = 8,height=8)
   maftools::plotmafSummary(maf = maf, rmOutlier = TRUE, addStat = 'median', dashboard = TRUE, titvRaw = FALSE)
   obj@output$plotmafSummary=file.path(output_dir,"oncosummary.svg")
   dev.off()
 
-  Mutsig2CV_directory<-obj@experiment@snp_indel_assay@Mutsig2CV_directory
-  mutsig2cv_sig_genes_file<-file.path(Mutsig2CV_directory,"sig_genes.txt")
-  if(!file.exists(mutsig2cv_sig_genes_file)){cat("Please run mutsigcv2 first")} else{
-    sig_genes<-read.csv(mutsig2cv_sig_genes_file,header=T,stringsAsFactors = F,check.names = F,sep="\t")
+  if(missing(selected_genes)){
+    Mutsig2CV_directory<-obj@experiment@snp_indel_assay@Mutsig2CV_directory
+    mutsig2cv_sig_genes_file<-file.path(Mutsig2CV_directory,"sig_genes.txt")
+    if(!file.exists(mutsig2cv_sig_genes_file)){cat("Please run mutsigcv2 first")} else{
+      sig_genes<-read.csv(mutsig2cv_sig_genes_file,header=T,stringsAsFactors = F,check.names = F,sep="\t")
+    }
+    selected_genes<-sig_genes$gene[sig_genes$p<=0.05 & sig_genes$nnon>=ifelse(length(unique(mutations$Tumor_Sample_Barcode))>20,2,1)]
+    if(!missing(cancer_genes)){
+      selected_genes<-selected_genes[selected_genes %in% cancer_genes]
+    }
   }
-  selected_genes<-sig_genes$gene[sig_genes$p<=0.05 & sig_genes$nnon>=ifelse(length(unique(mutations$Tumor_Sample_Barcode))>20,2,1)]
-  if(!missing(cancer_genes)){
-    selected_genes<-selected_genes[selected_genes %in% cancer_genes]
-  }
+  selected_genes<-selected_genes[selected_genes %in% mutations$Hugo_Symbol]
   #oncoplot
   svg(filename = file.path(output_dir,"oncoplot.svg"),width = 8,height=8)
-  onco_plot<-maftools::oncoplot(maf,sortByAnnotation = T,genes = selected_genes,removeNonMutated = F,...)
+  onco_plot<-maftools::oncoplot(maf,sortByAnnotation = T,genes = selected_genes,removeNonMutated = F)
   obj@output$onco_plot=file.path(output_dir,"oncoplot.svg")
   dev.off()
+  if(include_cnv){
+    Gistic2_directory=obj@experiment@cnv_assay@Gistic2_directory
+    focal_gene_cnv_file<-file.path(Gistic2_directory,"focal_data_by_genes.txt")
+    genes<-unique(mutations$Hugo_Symbol)
+    if(!file.exists(focal_gene_cnv_file)){
+      cat("Run Gistic2 first!")
+    } else {
+      focal_gene_cnv<-read.table(file=focal_gene_cnv_file,sep="\t",stringsAsFactors = F,check.names = F,header=T)
+      focal_gene_cnv<-focal_gene_cnv[,-match(c("Gene ID","Cytoband"),colnames(focal_gene_cnv))]
+      colnames(focal_gene_cnv)[match("Gene Symbol",colnames(focal_gene_cnv))]<-"Hugo_Symbol"
+      focal_gene_cnv<-reshape2::melt(focal_gene_cnv,id=c("Hugo_Symbol"),value.name = "Variant_Classification_",variable.name="Tumor_Sample_Barcode")
+      focal_gene_cnv$Variant_Classification<-ifelse(focal_gene_cnv$Variant_Classification>1,"Amp",
+                                                    ifelse(focal_gene_cnv$Variant_Classification>0.3,"Gain",
+                                                           ifelse(focal_gene_cnv$Variant_Classification<(-1),"Del",
+                                                                  ifelse(focal_gene_cnv$Variant_Classification<(-0.3),"Loss","Neutral"))))
+      focal_gene_cnv<-focal_gene_cnv[focal_gene_cnv$Hugo_Symbol %in% genes,-match("Variant_Classification_",colnames(focal_gene_cnv))]
+      focal_gene_cnv<-focal_gene_cnv[focal_gene_cnv$Variant_Classification!="Neutral",]
+    }
 
-  snp_indel_cnv_col<-c("Missense_Mutation"="#33A02B","Nonsense_Mutation"="#ff0000","In_Frame_Del"="#FEFF99","In_Frame_Ins"="#938038","Frame_Shift_Del"="#1F78B4","Frame_Shift_Ins"="#7b42f5","Splice_Site"="#00ffd5","Nonstop_Mutation"="#0022fc","UTR3"="#707173","UTR5"="#464647","Multi_Hit"="#000000")
-  complex_onco_plot<-utiltools::complex_oncoplot(snp_indels=mutations,selected_genes = selected_genes,mutsigCV2_sig_genes = sig_genes,multi_hit=TRUE,cnv_types = c("Loss","Gain","AMP","Del") ,show_heatmap_legend = T,cnv=F,top_filter = 100L,remove_macromolecular_gene = T,col=snp_indel_cnv_col,macromolecular_threshold = 300000,top_annotation = top_anno,sample_order =sample_order,output_dir=output_dir)
-  #plot titv summary
+    mutations_<-mutations[,colnames(focal_gene_cnv)]
+    cn_mutations<-rbind(mutations_,focal_gene_cnv)
+    driver_genes<-selected_genes
+    snp_indel_cnv_col<-c("Missense_Mutation"="#33A02B","Nonsense_Mutation"="#ff0000","In_Frame_Del"="#FEFF99","In_Frame_Ins"="#938038","Frame_Shift_Del"="#1F78B4","Frame_Shift_Ins"="#7b42f5","Splice_Site"="#00ffd5","Nonstop_Mutation"="#0022fc","UTR3"="#707173","UTR5"="#464647","Multi_Hit"="#000000","Amp"="#3366ff","Del"="#ff00ff","Loss"="#FFC7F7","Gain"="#99ccff")
+    complex_onco_plot<-complex_oncoplot(snp_indels=cn_mutations,selected_genes = driver_genes,multi_hit=TRUE,cnv_types = c("Loss","Gain","Amp","Del") ,show_heatmap_legend = T,cnv=T,top_filter = 100L,remove_macromolecular_gene = T,col=snp_indel_cnv_col,macromolecular_threshold = 300000,top_annotation = top_anno,top_anno_sample_order = DNA_samples,sample_order =sample_order,output_dir=output_dir)
+  } else{
+    snp_indel_cnv_col<-c("Missense_Mutation"="#33A02B","Nonsense_Mutation"="#ff0000","In_Frame_Del"="#FEFF99","In_Frame_Ins"="#938038","Frame_Shift_Del"="#1F78B4","Frame_Shift_Ins"="#7b42f5","Splice_Site"="#00ffd5","Nonstop_Mutation"="#0022fc","UTR3"="#707173","UTR5"="#464647","Multi_Hit"="#000000")
+    complex_onco_plot<-complex_oncoplot(snp_indels=mutations,selected_genes = selected_genes,multi_hit=TRUE,cnv_types = c("Loss","Gain","Amp","Del") ,show_heatmap_legend = T,cnv=F,top_filter = 100L,remove_macromolecular_gene = T,col=snp_indel_cnv_col,macromolecular_threshold = 300000,top_annotation = top_anno,top_anno_sample_order = DNA_samples,sample_order =sample_order,output_dir=output_dir)
+
+  }
+    #plot titv summary
   sample_titv = maftools::titv(maf = maf, plot = FALSE, useSyn = TRUE)
   svg(filename = file.path(output_dir,"titv.svg"),width = 8,height=8)
   titv_plot<-maftools::plotTiTv(res = sample_titv)
@@ -803,12 +1160,14 @@ setMethod("runMutationalMafAnalysis","Analysis",function(obj,maftools_mutation_c
     top_genes<-OR_table$Hugo_Symbol[1:max(sum(OR_table$OR_test<=0.25),20)]
     obj@output$OR_table<-OR_table
     mafcomparison<-maftools::mafCompare(m1=cohort1_maf,m2=cohort2_maf,m1Name = cohort1_term,m2Name = cohort2_term,minMut = 2)
-    svg(filename = file.path(output_dir,"mafcompare_forestplot.svg"),width = 8,height=8)
-    maftools::forestPlot(mafCompareRes = mafcomparison, pVal = 0.1)
-    dev.off()
-    svg(filename = file.path(output_dir,"mafcompare_cobarplot.svg"),width = 8,height=12)
-    maftools::coBarplot(m1=cohort1_maf,m2=cohort2_maf,m1Name = cohort1_term,m2Name = cohort2_term,genes = top_genes)
-    dev.off()
+    if(any(mafcomparison$results$pval<=0.1)){
+      svg(filename = file.path(output_dir,"mafcompare_forestplot.svg"),width = 8,height=8)
+      maftools::forestPlot(mafCompareRes = mafcomparison, pVal = 0.1)
+      dev.off()
+      svg(filename = file.path(output_dir,"mafcompare_cobarplot.svg"),width = 8,height=12)
+      maftools::coBarplot(m1=cohort1_maf,m2=cohort2_maf,m1Name = cohort1_term,m2Name = cohort2_term,genes = top_genes)
+      dev.off()
+    }
   }
 
   obj@log=paste(obj@log,"\n\n",Sys.time(),";\n\t",log,sep="")
@@ -824,6 +1183,7 @@ setMethod("runMutationalMafAnalysis","Analysis",function(obj,maftools_mutation_c
 
 
 
+
 #' runMDLAnalysis
 #' run analysis from pyNBS output
 #'
@@ -836,9 +1196,12 @@ setMethod("runMutationalMafAnalysis","Analysis",function(obj,maftools_mutation_c
 #' @param oncokb_cancer_genes_info data.frame. oncokb database.
 #' @param with_cosmic logic. whether annotate with cosmic mutation.
 #' @param cosmic_mutations data.frame. cosmic mutation database.
+#' @param include_mdl_only_samples logic. whether include samples with only mdl mutations.
+#' @param include_cnv logic. whether include cnv in complex_oncoplot.
 #' @param top_anno HeatmapAnnotation. top annotation, passed to heatmap.
 #' @param top_anno_sample_order character. sample orders for top annotation.
 #' @param cancer_genes character. cancer gene list.
+#' @param selected_genes character. selected genes to show.
 #' @param sample_order character. sample order for complex onco plot.
 #' @param save_analysis logic. whether to save results locally.
 #' @param output_dir character. output directory, if missing, use project/analysis_name as directory
@@ -848,8 +1211,8 @@ setMethod("runMutationalMafAnalysis","Analysis",function(obj,maftools_mutation_c
 #' @return Analysis.
 #' @export
 #'
-setGeneric("runMDLAnalysis",function(obj,mdl_info,convert2maftools,maftools_mutation_conversion_dict,mutation_panel_info,with_oncokb=T,oncokb_cancer_genes_info,with_cosmic=T,cosmic_mutations,top_anno,top_anno_sample_order,cancer_genes,sample_order=NULL,save_analysis=F,output_dir,log="run mutational pynbs analysis.",...) standardGeneric("runMDLAnalysis"))
-setMethod("runMDLAnalysis","Analysis",function(obj,mdl_info,convert2maftools,maftools_mutation_conversion_dict,mutation_panel_info,with_oncokb=T,oncokb_cancer_genes_info,with_cosmic=T,cosmic_mutations,top_anno,top_anno_sample_order,cancer_genes,sample_order=NULL,save_analysis=F,output_dir,log="run mutational pynbs analysis.",...){
+setGeneric("runMDLAnalysis",function(obj,mdl_info,convert2maftools,maftools_mutation_conversion_dict,mutation_panel_info,with_oncokb=T,oncokb_cancer_genes_info,with_cosmic=T,cosmic_mutations,include_mdl_only_samples=F,include_cnv=F,top_anno,top_anno_sample_order,cancer_genes,selected_genes=NULL,sample_order=NULL,save_analysis=F,output_dir,log="run mutational pynbs analysis.",...) standardGeneric("runMDLAnalysis"))
+setMethod("runMDLAnalysis","Analysis",function(obj,mdl_info,convert2maftools,maftools_mutation_conversion_dict,mutation_panel_info,with_oncokb=T,oncokb_cancer_genes_info,with_cosmic=T,cosmic_mutations,include_mdl_only_samples=F,include_cnv=F,top_anno,top_anno_sample_order,cancer_genes,selected_genes=NULL,sample_order=NULL,save_analysis=F,output_dir,log="run mutational pynbs analysis.",...){
 
   if(save_analysis){
     if(missing(output_dir)){
@@ -858,9 +1221,11 @@ setMethod("runMDLAnalysis","Analysis",function(obj,mdl_info,convert2maftools,maf
     }
   }
   mdl_mutations<-obj@experiment@mdl_assay@assay_data
+  mdl_mutations$document_service_at<-as.character(as.Date(gsub(" [AP]M.*","",mdl_mutations$document_service_at,perl=T),"%Y-%m-%d"))#remove other time information except date
   #remove wildtype, annotate mdl_mutations with Variant_Classification and Variant_Type
   mdl_mutations<-mdl_mutations[mdl_mutations$indication_name!="wildtype",]
-  mdl_mutations <- mdl_mutations %>% dplyr::group_by(Sample_ID,gene_name) %>% dplyr::mutate(n_annotator=dplyr::n_distinct(annotator_version_number)) %>% dplyr::filter(!(n_annotator>1 & annotator_version_number=="mdl_1.1"))  %>% dplyr::select(-n_annotator)#multiple annotated genes with old version?
+  mdl_mutations <- mdl_mutations %>% dplyr::group_by(Sample_ID,gene_name) %>% dplyr::mutate(n_annotator=n_distinct(annotator_version_number)) %>% arrange(Sample_ID,gene_name,n_annotator)
+  mdl_mutations <- mdl_mutations[!duplicated(mdl_mutations[,c("Sample_ID","gene_name","n_annotator")]),]#multiple annotated genes with old version?
   mdl_mutations <- mdl_mutations %>% dplyr::group_by(Patient_ID,Sample_ID,gene_name,document_subtype_description) %>% dplyr::mutate(conflicthits=dplyr::n())
   mdl_mutations<-mdl_mutations[!(mdl_mutations$conflicthits>1 & mdl_mutations$indication_name=="wildtype"),]# remove conflict wildtype (mutation and wildtype found in same sample and same gene),total 433 mutations(germline,mutation,variant)
   mdl_mutations$func.knowngene<-"exonic"
@@ -888,35 +1253,50 @@ setMethod("runMDLAnalysis","Analysis",function(obj,mdl_info,convert2maftools,maf
   mdl_info<-mdl_info[mdl_info$Patient_ID %in% mdl_mutations$Patient_ID,]
 
   sample_info<-obj@experiment@sample_info
-  wes_sample_info<-sample_info[sample_info$Assay=="DNA",]
+  wes_sample_info<-sample_info[sample_info$Assay=="WES",]
 
   wes_mutations<-obj@experiment@snp_indel_assay@assay_data
   if(convert2maftools){
     wes_mutations<-utiltools::convert_mutations(wes_mutations,target = "maftools",maftools_mutation_conversion_dict = maftools_mutation_conversion_dict,)
   }
 
-  mdl_wes_mutations<-utiltools::harmonize_mutations(wes_sample_info=wes_sample_info,wes_sample_id_col="Sample_ID",wes_patient_id_col="Patient_ID",wes_timepoint_col="Timepoint",wes_sample_collect_col="Collectdate",
+  mdl_wes_mutations<-harmonize_mutations(wes_sample_info=wes_sample_info,wes_sample_id_col="Sample_ID",wes_patient_id_col="Patient_ID",wes_timepoint_col="Timepoint",wes_sample_collect_col="Collectedat",
                                          wes_mutations=wes_mutations,wes_mutation_sample_id_col="Tumor_Sample_Barcode",wes_gene_col="Hugo_Symbol",wes_chromosome_col="Chromosome",wes_start_col="Start_position",wes_end_col="End_position",wes_keep_columns=c("Variant_Classification","Variant_Type","Reference_Allele","Tumor_Seq_Allele1","Tumor_Seq_Allele2","Protein_Change","i_TumorVAF_WU","cdna"),
-                                         mdl_sample_info=mdl_info,mdl_sample_id_col="Sample_ID",mdl_patient_id_col="Patient_ID",mdl_timepoint_col="Timepoint",mdl_sample_collect_time_col="Collected_At",
-                                         mdl_mutations=mdl_mutations,mdl_mutation_sample_id_col="Sample_ID",mdl_mutation_patient_id_col="Patient_ID",mdl_mutation_collect_time_col="document_service_at",mdl_mutation_gene_col="gene_name",mdl_mutation_indication_col="indication_name",mdl_mutations_aa_col="protein_description",mdl_mutation_panel_col="document_subtype_description",mdl_mutation_keep_columns=c("indication_name","aa_change","reference_nucleotide","alternate_nucleotide","ref_seq_type","nucleotide_change" ,"nucleotide_change_type" ,"nucleotide_change_subtype"),
+                                         mdl_sample_info=mdl_info,mdl_sample_id_col="Sample_ID",mdl_patient_id_col="Patient_ID",mdl_timepoint_col="Timepoint",mdl_sample_collect_time_col="Collected_At",mdl_sample_collect_date_format="%m/%d/%y",
+                                         mdl_mutations=mdl_mutations,mdl_mutation_sample_id_col="Sample_ID",mdl_mutation_patient_id_col="Patient_ID",mdl_mutation_collect_time_col="document_service_at",mdl_mutation_collect_date_format="%Y-%m-%d",mdl_mutation_gene_col="gene_name",mdl_mutation_indication_col="indication_name",mdl_mutations_aa_col="protein_description",mdl_mutation_panel_col="document_subtype_description",mdl_mutation_keep_columns=c("indication_name","aa_change","reference_nucleotide","alternate_nucleotide","ref_seq_type","nucleotide_change" ,"nucleotide_change_type" ,"nucleotide_change_subtype"),
                                          panel_info=mutation_panel_info,panel_id_col="document_type",panel_chromosome_col="chromosome",panel_start_col="start_pos",panel_end_col="end_pos",panel_gene_col="gene",
                                          with_oncokb=T,oncokb_db=oncokb_cancer_genes_info,oncokb_gene_col="Hugo Symbol",with_cosmic=T,cosmic_db=cosmic_mutations,cosmic_gene_col="GENE_NAME",cosmic_aa_col="Mutation AA",
                                          combined=TRUE)
-
-
   mdl_sample_info<-sample_info[sample_info$Assay=="MDL",c("Patient_ID","Timepoint","Sample_ID")]
-  DNA_sample_info<-sample_info[sample_info$Assay=="DNA",c("Patient_ID","Timepoint","Sample_ID")]
-  mdl_sample2DNA_sample_<-merge(mdl_sample_info,DNA_sample_info,by=c("Patient_ID","Timepoint"),suffixes=c("_MDL","_DNA"))
-  mdl_sample2DNA_sample<-mdl_sample2DNA_sample_$Sample_ID_DNA
-  mdl_sample2DNA_sample<-setNames(mdl_sample2DNA_sample,nm=mdl_sample2DNA_sample_$Sample_ID_MDL)
-  mdl_wes_mutations$Sample_ID<-sapply(mdl_wes_mutations$Sample_ID,function(item){items<-unlist(strsplit(item,";")); last_item=items[length(items)];ifelse(last_item %in% names(mdl_sample2DNA_sample),mdl_sample2DNA_sample[last_item],last_item)})
-  DNA_consistent_mdl_wes_mutations<-mdl_wes_mutations[!mdl_wes_mutations$Sample_ID %in% mdl_sample_info$Sample_ID,]
-  mutations<-DNA_consistent_mdl_wes_mutations
+  wes_sample_info<-sample_info[sample_info$Assay=="WES",c("Patient_ID","Timepoint","Sample_ID")]
+  mdl_sample2wes_sample_<-merge(mdl_sample_info,wes_sample_info,by=c("Patient_ID","Timepoint"),suffixes=c("_MDL","_DNA"))
+  mdl_sample2wes_sample<-mdl_sample2wes_sample_$Sample_ID_DNA
+  mdl_sample2wes_sample<-setNames(mdl_sample2wes_sample,nm=mdl_sample2wes_sample_$Sample_ID_MDL)
+  mdl_wes_mutations$Sample_ID<-sapply(mdl_wes_mutations$Sample_ID,function(item){items<-unlist(strsplit(item,";")); last_item=items[length(items)];ifelse(last_item %in% names(mdl_sample2wes_sample),mdl_sample2wes_sample[last_item],last_item)})
+
+  repeated_mdl_patient_ids<-mdl_sample_info$Patient_ID[duplicated(mdl_sample_info$Patient_ID)]
+  repeated_mdl_sample_ids<-lapply(repeated_mdl_patient_ids,function(pid){mdl_sample_info$Sample_ID[mdl_sample_info==pid]})
+  names(repeated_mdl_sample_ids)<-repeated_mdl_patient_ids
+  for(pid in repeated_mdl_patient_ids){
+    if(any(mdl_wes_mutations$Sample_ID %in% repeated_mdl_sample_ids[[pid]])){
+      mdl_wes_mutations$Sample_ID[mdl_wes_mutations$Sample_ID %in% repeated_mdl_sample_ids[[pid]]]<-repeated_mdl_sample_ids[[pid]][1]
+    }
+  }
+  mdl_sample_info<-mdl_sample_info[!duplicated(mdl_sample_info$Patient_ID),,drop=F]
+
+  wes_consistent_mdl_wes_mutations<-mdl_wes_mutations[!mdl_wes_mutations$Sample_ID %in% mdl_sample_info$Sample_ID,]
+
+  if(include_mdl_only_samples){
+    mutations<-mdl_wes_mutations
+  } else{
+    mutations<-wes_consistent_mdl_wes_mutations
+  }
   mutations$Hugo_Symbol<-mutations$Gene
   mutations$Tumor_Sample_Barcode<-mutations[["Sample_ID"]]
 
 
-  DNA_samples<-top_anno_sample_order
+  DNA_samples<-top_anno_sample_order[top_anno_sample_order %in% unique(mutations$Sample_ID)]
+  top_anno<-top_anno[match(DNA_samples,top_anno_sample_order)]
   #sample_info<-merge(merge(data.frame(Sample_ID=DNA_samples),obj@experiment@sample_info[,c("Sample_ID","Patient_ID")],by="Sample_ID",all.x=T),obj@experiment@patient_info,by="Patient_ID",all.x=T)
   #sample_info$Tumor_Sample_Barcode<-sample_info$Sample_ID
   mutations$Tumor_Sample_Barcode<-factor(mutations$Tumor_Sample_Barcode,levels=DNA_samples)
@@ -926,9 +1306,11 @@ setMethod("runMDLAnalysis","Analysis",function(obj,mdl_info,convert2maftools,maf
   if(!file.exists(mutsig2cv_sig_genes_file)){cat("Please run mutsigcv2 first")} else{
     sig_genes<-read.csv(mutsig2cv_sig_genes_file,header=T,stringsAsFactors = F,check.names = F,sep="\t")
   }
-  selected_genes<-sig_genes$gene[sig_genes$p<=0.05 & sig_genes$nnon>=ifelse(length(unique(mutations$Tumor_Sample_Barcode))>20,2,1)]
-  if(!missing(cancer_genes)){
-    selected_genes<-selected_genes[selected_genes %in% cancer_genes]
+  if(is.null(selected_genes)){
+    selected_genes<-sig_genes$gene[sig_genes$p<=0.05 & sig_genes$nnon>=ifelse(length(unique(mutations$Tumor_Sample_Barcode))>20,2,1)]
+    if(!missing(cancer_genes)){
+      selected_genes<-selected_genes[selected_genes %in% cancer_genes]
+    }
   }
 
   if(!is.null(sample_order)){
@@ -939,20 +1321,51 @@ setMethod("runMDLAnalysis","Analysis",function(obj,mdl_info,convert2maftools,maf
   }
   sequence_methods<-rep("WES",length(DNA_samples))
   sequence_methods<-setNames(sequence_methods,DNA_samples)
-  sequence_methods[unname(mdl_sample2DNA_sample)]<-"MDL;WES"
-  sequence_methods_anno<-ComplexHeatmap::HeatmapAnnotation(Method=factor(unname(sequence_methods)),annotation_name_side = "left",col=list(Method=c("WES"="grey","MDL;WES"="blue")))
+  sequence_methods[unname(mdl_sample2wes_sample)]<-"MDL;WES"
+  sequence_methods[names(sequence_methods) %in% mdl_sample_info$Sample_ID]<-"MDL"
+  sequence_methods_anno<-ComplexHeatmap::HeatmapAnnotation(Method=factor(unname(sequence_methods)),annotation_name_side = "left",col=list(Method=c("WES"="grey","MDL;WES"="blue","MDL"="red")))
 
   top_anno<-c(top_anno,sequence_methods_anno)
-  snp_indel_cnv_col<-c("Missense_Mutation"="#33A02B","Nonsense_Mutation"="#ff0000","In_Frame_Del"="#FEFF99","In_Frame_Ins"="#938038","Frame_Shift_Del"="#1F78B4","Frame_Shift_Ins"="#7b42f5","Splice_Site"="#00ffd5","Nonstop_Mutation"="#0022fc","UTR3"="#707173","UTR5"="#464647","Multi_Hit"="#a68a6c")
-  complex_onco_plot<-utiltools::complex_oncoplot(snp_indels=mutations,selected_genes = selected_genes,mutsigCV2_sig_genes = sig_genes,multi_hit=TRUE,cnv_types = c("Loss","Gain","AMP","Del") ,show_heatmap_legend = T,cnv=F,top_filter = 100L,remove_macromolecular_gene = T,col=snp_indel_cnv_col,multi_hit_col = "#a68a6c",macromolecular_threshold = 300000,top_annotation = top_anno,sample_order =sample_order,annotate_source = T,source_column = "Support",output_dir=output_dir,...)
+  if(include_cnv){
+    Gistic2_directory=obj@experiment@cnv_assay@Gistic2_directory
+    focal_gene_cnv_file<-file.path(Gistic2_directory,"focal_data_by_genes.txt")
+    genes<-unique(mutations$Hugo_Symbol)
+    if(!file.exists(focal_gene_cnv_file)){
+      cat("Run Gistic2 first!")
+    } else {
+      focal_gene_cnv<-read.table(file=focal_gene_cnv_file,sep="\t",stringsAsFactors = F,check.names = F,header=T)
+      focal_gene_cnv<-focal_gene_cnv[,-match(c("Gene ID","Cytoband"),colnames(focal_gene_cnv))]
+      colnames(focal_gene_cnv)[match("Gene Symbol",colnames(focal_gene_cnv))]<-"Hugo_Symbol"
+      focal_gene_cnv<-reshape2::melt(focal_gene_cnv,id=c("Hugo_Symbol"),value.name = "Variant_Classification_",variable.name="Tumor_Sample_Barcode")
+      focal_gene_cnv$Variant_Classification<-ifelse(focal_gene_cnv$Variant_Classification>1,"Amp",
+                                                    ifelse(focal_gene_cnv$Variant_Classification>0.3,"Gain",
+                                                           ifelse(focal_gene_cnv$Variant_Classification<(-1),"Del",
+                                                                  ifelse(focal_gene_cnv$Variant_Classification<(-0.3),"Loss","Neutral"))))
+      focal_gene_cnv<-focal_gene_cnv[focal_gene_cnv$Hugo_Symbol %in% genes,-match("Variant_Classification_",colnames(focal_gene_cnv))]
+      focal_gene_cnv<-focal_gene_cnv[focal_gene_cnv$Variant_Classification!="Neutral",]
+    }
+    mutations_<-mutations[,c(colnames(focal_gene_cnv),setdiff(colnames(mutations),colnames(focal_gene_cnv)))]
+    cn_mutations<-rbind(mutations_,focal_gene_cnv)
+    driver_genes<-selected_genes
+    snp_indel_cnv_col<-c("Missense_Mutation"="#33A02B","Nonsense_Mutation"="#ff0000","In_Frame_Del"="#FEFF99","In_Frame_Ins"="#938038","Frame_Shift_Del"="#1F78B4","Frame_Shift_Ins"="#7b42f5","Splice_Site"="#00ffd5","Nonstop_Mutation"="#0022fc","UTR3"="#707173","UTR5"="#464647","Multi_Hit"="#a68a6c","Amp"="#3366ff","Del"="#ff00ff","Loss"="#FFC7F7","Gain"="#99ccff")
+    complex_onco_plot<-utiltools::complex_oncoplot(snp_indels=cn_mutations,selected_genes = driver_genes,mutsigCV2_sig_genes = sig_genes,multi_hit=TRUE,cnv_types = c("Loss","Gain","Amp","Del") ,show_heatmap_legend = T,cnv=T,top_filter = 100L,remove_macromolecular_gene = T,col=snp_indel_cnv_col,multi_hit_col = "#a68a6c",macromolecular_threshold = 300000,top_annotation = top_anno,top_anno_sample_order = DNA_samples,sample_order =sample_order,annotate_source = T,source_column = "Support",output_dir=output_dir,...)
+  } else{
+    snp_indel_cnv_col<-c("Missense_Mutation"="#33A02B","Nonsense_Mutation"="#ff0000","In_Frame_Del"="#FEFF99","In_Frame_Ins"="#938038","Frame_Shift_Del"="#1F78B4","Frame_Shift_Ins"="#7b42f5","Splice_Site"="#00ffd5","Nonstop_Mutation"="#0022fc","UTR3"="#707173","UTR5"="#464647","Multi_Hit"="#a68a6c")
+    complex_onco_plot<-utiltools::complex_oncoplot(snp_indels=mutations,selected_genes = selected_genes,mutsigCV2_sig_genes = sig_genes,multi_hit=TRUE,cnv_types = c("Loss","Gain","Amp","Del") ,show_heatmap_legend = T,cnv=F,top_filter = 100L,remove_macromolecular_gene = T,col=snp_indel_cnv_col,multi_hit_col = "#a68a6c",macromolecular_threshold = 300000,top_annotation = top_anno,top_anno_sample_order=DNA_samples,sample_order =sample_order,annotate_source = T,source_column = "Support",output_dir=output_dir,...)
+  }
+  if(save_analysis){
+    if(include_mdl_only_samples){
+      obj@output$mdl_wes_mutations<-mutations
+      write.csv(mutations,file.path(output_dir,"mdl_wes_mutations.csv"))
+    } else {
+      obj@output$DNA_consistent_mdl_wes_mutations<-mutations
+      write.csv(mutations,file.path(output_dir,"DNA_consistent_mdl_wes_mutations.csv"))
+    }
+  }
 
-  obj@output$DNA_consistent_mdl_wes_mutations<-DNA_consistent_mdl_wes_mutations
   obj@output$complex_onco_plot<-complex_onco_plot
   obj@log=paste(obj@log,"\n\n",Sys.time(),";\n\t",log,sep="")
-  if(save_analysis){
-    write.csv(DNA_consistent_mdl_wes_mutations,file.path(output_dir,"DNA_consistent_mdl_wes_mutations.csv"))
-    cat(obj@log,file=file.path(output_dir,"log.txt"))
-  }
+  cat(obj@log,file=file.path(output_dir,"log.txt"))
   return(obj)
 }
 )
@@ -985,11 +1398,10 @@ setMethod("runpyNBSAnalysis","Analysis",function(obj,pyNBS_dir,survival_column,s
       if(!dir.exists(output_dir)){dir.create(output_dir,recursive = T)}
     }
   }
-browser()
   DNA_samples<-top_anno_sample_order
   sample_info<-merge(merge(data.frame(Sample_ID=DNA_samples),obj@experiment@sample_info,by="Sample_ID",all.x=T),obj@experiment@patient_info,by="Patient_ID",all.x=T)
   sample_info$Tumor_Sample_Barcode<-sample_info$Sample_ID
-  colnames(sample_info)[match(c(survival_column,status_column),colnames(sample_info))]<-c("Survival","Status")
+  colnames(sample_info)[match(c(survival_column,status_column),colnames(sample_info))]<-c("Survival_","Status_")
 
   #pyNBS cluster
   stopifnot("No pyNBS directory found. Please run pyNBS first."=dir.exists(pyNBS_dir))
@@ -1008,8 +1420,8 @@ browser()
   names(pyNBS_Cluster_col)<-unique(pynbs_cluster[["pyNBS_Cluster"]])
   pynbs_cluster_anno<-ComplexHeatmap::HeatmapAnnotation(df=pynbs_cluster[DNA_samples,"pyNBS_Cluster",drop=F],col=list(pyNBS_Cluster=pyNBS_Cluster_col))
   pynbs_cc_heatmap<-ComplexHeatmap::Heatmap(pynbs_cc,top_annotation = c(top_anno,pynbs_cluster_anno),name="coef")
-  sample_info$pyNBS_Cluster[match(rownames(pynbs_cluster),sample_info$Tumor_Sample_Barcode)]<-pynbs_cluster[['pyNBS_Cluster']]
-  pyNBSOS<-sample_info %>% survivalAnalysis::analyse_survival(dplyr::vars(Survival,Status),by=pyNBS_Cluster)
+  sample_info$pyNBS_Cluster<-pynbs_cluster[['pyNBS_Cluster']][match(sample_info$Tumor_Sample_Barcode,rownames(pynbs_cluster))]
+  pyNBSOS<-sample_info %>% survivalAnalysis::analyse_survival(dplyr::vars(Survival_,Status_),by=pyNBS_Cluster)
 
   if(missing(palette)){
     palette<-RColorBrewer::brewer.pal(n=clusters,name="Paired")[1:clusters]
@@ -1463,17 +1875,22 @@ deltaAnalysis<-function(assay,scale=F,assay_name="assay",
   }
   if(test_method=="limma"){
     baseline_limma<-utiltools::dge_limma(baseline_assay,is_rawcount = F,is_logged = T,normalize = F,sample_frequency_threshold = 0.5,clinic_info =data.frame(Sample_ID=colnames(baseline_assay),Group=groups),ID_col = "Sample_ID",group_col = "Group",contrasts = contrasts,method ="limma_trend")
-    baseline_statistics_<-baseline_statistics$statistics[[colnames(baseline_statistics$statistics)[grepl("p.value",colnames(baseline_statistics$statistics),ignore.case=TRUE)]]]
-    baseline_statistics<-stats::setNames(baseline_statistics_,rownames(baseline_statistics$statistics))
+    baseline_statistics_<-baseline_limma$statistics[[colnames(baseline_limma$statistics)[grepl("p.value",colnames(baseline_limma$statistics),ignore.case=TRUE)]]]
+    baseline_statistics<-stats::setNames(baseline_statistics_,rownames(baseline_limma$statistics))
     baseline_statistics<-baseline_statistics[feature_order]
 
     tp2_limma<-utiltools::dge_limma(tp2_assay,is_rawcount = F,is_logged = T,normalize = F,sample_frequency_threshold = 0.5,clinic_info =data.frame(Sample_ID=colnames(tp2_assay),Group=groups),ID_col = "Sample_ID",group_col = "Group",contrasts = contrasts,method ="limma_trend")
-    tp2_statistics_<-tp2_statistics$statistics[[colnames(tp2_statistics$statistics)[grepl("p.value",colnames(tp2_statistics$statistics),ignore.case=TRUE)]]]
-    tp2_statistics<-stats::setNames(tp2_statistics_,rownames(tp2_statistics$statistics))
+    tp2_statistics_<-tp2_limma$statistics[[colnames(tp2_limma$statistics)[grepl("p.value",colnames(tp2_limma$statistics),ignore.case=TRUE)]]]
+    tp2_statistics<-stats::setNames(tp2_statistics_,rownames(tp2_limma$statistics))
     tp2_statistics<-tp2_statistics[feature_order]
 
-    delta_statistics<-apply(delta_assay,1,function(r_data){data=data.frame(Value=as.numeric(r_data),Group=groups);test=stats::t.test(Value~Group,data=data);return(test$p.value)})
+    delta_limma<-utiltools::dge_limma(delta_assay,is_rawcount = F,is_logged = T,normalize = F,sample_frequency_threshold = 0.5,clinic_info =data.frame(Sample_ID=colnames(baseline_assay),Group=groups),ID_col = "Sample_ID",group_col = "Group",contrasts = contrasts,method ="limma_trend")
+    delta_statistics_<-delta_limma$statistics[[colnames(delta_limma$statistics)[grepl("p.value",colnames(delta_limma$statistics),ignore.case=TRUE)]]]
+    delta_statistics<-stats::setNames(delta_statistics_,rownames(delta_limma$statistics))
     delta_statistics<-delta_statistics[feature_order]
+
+#    delta_statistics<-apply(delta_assay,1,function(r_data){data=data.frame(Value=as.numeric(r_data),Group=groups);test=stats::t.test(Value~Group,data=data);return(test$p.value)})
+#    delta_statistics<-delta_statistics[feature_order]
   }
 
   combined_statistics<-c(baseline_statistics,tp2_statistics,delta_statistics)
@@ -1547,6 +1964,7 @@ deltaAnalysis<-function(assay,scale=F,assay_name="assay",
 #' @param specialpathwaylists list. special pathway(geneset) list.
 #' @param only_sig_genes logic. whether only significant genes will be used.
 #' @param only_show_sig_genes logic. whether only significant genes will be showed in heatmap.
+#' @param specific_features character. plot specific features.
 #' @param save_analysis logic. whether to save results locally.
 #' @param output_dir character. output directory, if missing, use project/analysis_name as directory
 #' @param log character. any comments.
@@ -1557,11 +1975,12 @@ deltaAnalysis<-function(assay,scale=F,assay_name="assay",
 setGeneric("runAssayDeltaAnalysis",function(obj,assay_name,assay_type="RNA",scale,
                                            patient_id_column="Patient_ID",sample_id_column="Sample_ID",timepoint_column="Timepoint",timepoint_terms=c("baseline"="Baseline","tp2"="TP2"),group_column,
                                            top_anno,top_anno_patient_order,palette,
-                                           test_method=c("ttest","limma"),contrasts="SHORT-LONG",pval_cutoff = 0.05,
+                                           test_method=c("ttest","limma"),contrasts,pval_cutoff = 0.05,
                                            run_go=FALSE,run_gsea=FALSE,
                                            logFC_cutoff = 1,padj_cutoff = 0.05,
                                            cancergenes=cancergenes, pathwaylists=pathwaylists,specialpathwaylists=specialpathwaylists,
                                            only_sig_genes=F,only_show_sig_genes=F,
+                                           specific_features=NULL,
                                            save_analysis = T,output_dir,
                                            log="run assay delta analysis.") standardGeneric("runAssayDeltaAnalysis"))
 setMethod("runAssayDeltaAnalysis","Analysis",function(obj,assay_name,assay_type="RNA",scale,
@@ -1572,6 +1991,7 @@ setMethod("runAssayDeltaAnalysis","Analysis",function(obj,assay_name,assay_type=
                                                      logFC_cutoff = 1,padj_cutoff = 0.05,
                                                      cancergenes=cancergenes, pathwaylists=pathwaylists,specialpathwaylists=specialpathwaylists,
                                                      only_sig_genes=F,only_show_sig_genes=F,
+                                                     specific_features=NULL,
                                                      save_analysis = T,output_dir,
                                                      log="run assay delta analysis."){
   if(save_analysis){
@@ -1591,7 +2011,7 @@ setMethod("runAssayDeltaAnalysis","Analysis",function(obj,assay_name,assay_type=
   sample_info<-merge(sample_info,patient_info,by="Patient_ID",all.x=T)
   assay_data=methods::slot(obj@experiment,assay_name)@assay_data
   if(missing(palette)){palette=c("blue","white","red")}
-  if(missing(contrasts)){paste(rev(sort(unique(sample_info[[group_column]]))),collapse = "-")}
+  if(missing(contrasts)){contrasts<-paste(rev(sort(unique(sample_info[[group_column]]))),collapse = "-")}
   delta_analysis<-deltaAnalysis(assay=assay_data,scale=scale,
                                 sample_info = sample_info,patient_id_column = patient_id_column,sample_id_column = sample_id_column,timepoint_column = timepoint_column,timepoint_terms = timepoint_terms,group_column = group_column,
                                 top_anno = top_anno,top_anno_patient_order = top_anno_patient_order,palette = palette,
@@ -1661,6 +2081,18 @@ setMethod("runAssayDeltaAnalysis","Analysis",function(obj,assay_name,assay_type=
       }
     }
   }
+  if(!is.null(specific_features)){
+    assertthat::are_equal(colnames(assay_data),sample_info[[sample_id_column]])
+    contrasts_<-lapply(contrasts,function(contr){unlist(strsplit(contr,"-"))})
+    features_df<-data.frame(as.data.frame(t(assay_data[specific_features,,drop=F])),sample_info[,c(patient_id_column,group_column,timepoint_column),drop=F])
+    features_df<-features_df[order(features_df[[group_column]],features_df[[patient_id_column]]),]
+    features_df<-tidyr::pivot_longer(features_df,cols=specific_features,names_to="Feature",values_to = "Score")
+    features_p<-ggpubr::ggboxplot(features_df,x=group_column,y="Score",color = timepoint_column, palette = "jco", add = "jitter",facet.by = "Feature")
+    obj@output$features_plot=features_p
+    if(save_analysis){
+      ggplot2::ggsave(filename = file.path(output_dir,"features_plot.svg"),plot = features_p,width = 20,height=8)
+    }
+  }
 
   if(save_analysis){
     write.csv(obj@output$combined_assay,file.path(output_dir,"combined_assay.csv"),row.names = F)
@@ -1712,7 +2144,6 @@ difAnalysis<-function(assay,scale=F,assay_name="assay",
     assay<-as.data.frame(t(scale(t(assay))))
   }
   test_method=match.arg(test_method)
-
   assay_samples<-top_anno_sample_order
   sample_info<-merge(data.frame(Sample_ID=assay_samples),sample_info,by=sample_id_column,all.x=T)
   sample_info<-sample_info[match(assay_samples, sample_info$Sample_ID),]
@@ -1738,7 +2169,7 @@ difAnalysis<-function(assay,scale=F,assay_name="assay",
     group_statistics<-group_statistics[feature_order]
     group_results[["F_pvalue"]]<-group_statistics
     if(only_sig_genes){
-      sig_genes<-feature_order[group_statistics<=pval_cutoff]
+      sig_genes<-stats::na.omit(feature_order[group_statistics<=pval_cutoff])
       f_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(assay[sig_genes,]))),name=paste("zscore",assay_name,sep="_"),col=col,column_split = sample_info[[group_column]],top_annotation = top_anno,...)
       if(!is.null(output_dir)){
         if(!dir.exists(output_dir)){dir.create(output_dir,recursive = T)}
@@ -1752,8 +2183,8 @@ difAnalysis<-function(assay,scale=F,assay_name="assay",
       neg_log_statistics=-log10(group_statistics)
       row_anno<-ComplexHeatmap::rowAnnotation(`-log10(p)`=ComplexHeatmap::anno_barplot(neg_log_statistics,gp=grid::gpar(fill=ifelse(neg_log_statistics>(-log10(pval_cutoff)),"red","gray")),ylim=c(0,max(c(neg_log_statistics,-log10(pval_cutoff)))+0.5)),
                                               width=grid::unit(3,"cm"),show_annotation_name = T,annotation_name_side="bottom",annotation_name_rot=0)
-      fontsize=rep(6,nrow(assay))
-      fontsize[neg_log_statistics>=(-log10(pval_cutoff))]<-10
+      fontsize=rep(5,nrow(assay))
+      fontsize[neg_log_statistics>=(-log10(pval_cutoff))]<-8
       fontface=rep("plain",nrow(assay))
       fontface[neg_log_statistics>=(-log10(pval_cutoff))]<-"bold"
       f_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(assay))),name=paste("zscore",assay_name,sep="_"),col = col,top_annotation = top_anno,column_split = sample_info[[group_column]],right_annotation = row_anno,row_names_gp = grid::gpar(fontsize=fontsize,fontface=fontface),...)
@@ -1805,22 +2236,47 @@ difAnalysis<-function(assay,scale=F,assay_name="assay",
         subset_statistics<-subset_statistics[feature_order]
       }
     }
-
     if(only_sig_genes){
-      sig_genes<-feature_order[subset_statistics<=pval_cutoff]
-      contrast_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(subset_assay[sig_genes,]))),name=paste("zscore",assay_name,sep="_"),column_split = subset_sample_info[[group_column]],top_annotation = subset_top_anno,...)
+      if(!any(subset_statistics<=pval_cutoff)){
+        cat("No significantly different assay found!\n")
+        next
+      }
+      sig_genes<-stats::na.omit(feature_order[subset_statistics<=pval_cutoff])
+      heatmap_file<-"_heatmap.svg"
+      #if(length(sig_genes)>=10){
+      #  sig_genes_<-feature_order[p.adjust(subset_statistics,method="BH")<=pval_cutoff]
+      #  if(length(sig_genes_)>10){sig_genes<-sig_genes_}
+      #  heatmap_file<-"_heatmap_adjp.svg"}
+      sig_assay<-subset_assay[sig_genes,]
+      sig_neg_log_statistics=-log10(subset_statistics[sig_genes])
+      row_anno<-ComplexHeatmap::rowAnnotation(`-log10(p)`=ComplexHeatmap::anno_barplot(sig_neg_log_statistics,gp=grid::gpar(fill=ifelse(sig_neg_log_statistics>(-log10(pval_cutoff)),"red","gray")),ylim=c(0,max(c(sig_neg_log_statistics,-log10(pval_cutoff)))+0.5)),
+                                              width=grid::unit(3,"cm"),show_annotation_name = T,annotation_name_side="bottom",annotation_name_rot=0)
+      fontsize=rep(5,nrow(sig_assay))
+      fontsize[sig_neg_log_statistics>=(-log10(pval_cutoff))]<-8
+      fontface=rep("plain",nrow(sig_assay))
+      fontface[sig_neg_log_statistics>=(-log10(pval_cutoff))]<-"bold"
+
+      contrast_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(sig_assay))),name=paste("zscore",assay_name,sep="_"),column_split = subset_sample_info[[group_column]],top_annotation = subset_top_anno,right_annotation = row_anno,row_names_gp = grid::gpar(fontsize=fontsize,fontface=fontface),...)
       if(!is.null(output_dir)){
         if(!dir.exists(file.path(output_dir,contrast))){dir.create(file.path(output_dir,contrast),recursive = T)}
-        svg(filename = file.path(output_dir,contrast,paste(contrast,"_heatmap.svg",sep="")),width = 20,height=12)
+        .width<-ncol(sig_assay)*1.5
+        .height<-(length(subset_top_anno))/2+nrow(sig_assay)/10
+        svg(filename = file.path(output_dir,contrast,paste(contrast,heatmap_file,sep="")),width = .width,height=.height)
         ComplexHeatmap::draw(contrast_heatmap)
+        if(any(sig_neg_log_statistics>(-(log10(pval_cutoff))))){
+          xpos<-0.95/(max(c(sig_neg_log_statistics,-log10(pval_cutoff)))+0.5)*(-log10(pval_cutoff))
+          ComplexHeatmap::decorate_annotation("-log10(p)",{
+            grid::grid.lines(c(xpos,xpos),c(0,1),gp = grid::gpar(lty = 2,col="red"))
+          })
+        }
         dev.off()
       }
     } else {
       neg_log_statistics=-log10(subset_statistics)
       row_anno<-ComplexHeatmap::rowAnnotation(`-log10(p)`=ComplexHeatmap::anno_barplot(neg_log_statistics,gp=grid::gpar(fill=ifelse(neg_log_statistics>(-log10(pval_cutoff)),"red","gray")),ylim=c(0,max(c(neg_log_statistics,-log10(pval_cutoff)))+0.5)),
                                               width=grid::unit(3,"cm"),show_annotation_name = T,annotation_name_side="bottom",annotation_name_rot=0)
-      fontsize=rep(6,nrow(subset_assay))
-      fontsize[neg_log_statistics>=(-log10(pval_cutoff))]<-10
+      fontsize=rep(5,nrow(subset_assay))
+      fontsize[neg_log_statistics>=(-log10(pval_cutoff))]<-8
       fontface=rep("plain",nrow(subset_assay))
       fontface[neg_log_statistics>=(-log10(pval_cutoff))]<-"bold"
       contrast_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(subset_assay))),name=paste("zscore",assay_name,sep="_"),col = col,top_annotation = subset_top_anno,column_split = subset_sample_info[[group_column]],right_annotation = row_anno,row_names_gp = grid::gpar(fontsize=fontsize,fontface=fontface),...)
@@ -1875,6 +2331,9 @@ difAnalysis<-function(assay,scale=F,assay_name="assay",
 #' @param pathwaylists list. pathway list.
 #' @param specialpathwaylists list. special pathway(geneset) list.
 #' @param only_sig_genes logic. whether only significant genes will be used.
+#' @param plot_specific_geneset logic. whether plot heatmap for specific genesets.
+#' @param specific_genesets character. names of specific geneset, if NULL, significant genesets will be plot.
+#' @param specific_features character. plot specific features.
 #' @param save_analysis logic. whether to save results locally.
 #' @param output_dir character. output directory, if is.null, use project/analysis_name as directory
 #' @param log character. any comments.
@@ -1883,24 +2342,26 @@ difAnalysis<-function(assay,scale=F,assay_name="assay",
 #' @return Analysis.
 #' @export
 #'
-setGeneric("runAssayDifAnalysis",function(obj,assay_name,assay_type="RNA",scale,
+setGeneric("runAssayDifAnalysis",function(obj,assay_name,assay_type="RNAseq",scale,
                                           patient_id_column="Patient_ID",sample_id_column="Sample_ID",group_column,block_column=NULL,
                                           top_anno,top_anno_sample_order,palette=NULL,
                                           test_method=c("ttest","limma"),contrasts=NULL,pval_cutoff = 0.05,
                                           run_go=FALSE,run_gsea=FALSE,
                                           logFC_cutoff = 1,padj_cutoff = 0.05,
                                           cancergenes=cancergenes, pathwaylists=pathwaylists,specialpathwaylists=specialpathwaylists,
-                                          only_sig_genes=F,
+                                          only_sig_genes=F,plot_specific_geneset=F,specific_genesets=NULL,
+                                          specific_features=NULL,
                                           save_analysis = T,output_dir,
                                           log="run assay differential analysis.",...) standardGeneric("runAssayDifAnalysis"))
-setMethod("runAssayDifAnalysis","Analysis",function(obj,assay_name,assay_type="RNA",scale,
+setMethod("runAssayDifAnalysis","Analysis",function(obj,assay_name,assay_type="RNAseq",scale,
                                                     patient_id_column="Patient_ID",sample_id_column="Sample_ID",group_column,block_column=NULL,
                                                     top_anno,top_anno_sample_order,palette=NULL,
                                                     test_method=c("ttest","limma"),contrasts=NULL,pval_cutoff = 0.05,
                                                     run_go=FALSE,run_gsea=FALSE,
                                                     logFC_cutoff = 1,padj_cutoff = 0.05,
                                                     cancergenes=cancergenes, pathwaylists=pathwaylists,specialpathwaylists=specialpathwaylists,
-                                                    only_sig_genes=F,
+                                                    only_sig_genes=F,plot_specific_geneset=F,specific_genesets=NULL,
+                                                    specific_features=NULL,
                                                     save_analysis = T,output_dir,
                                                     log="run assay differential analysis.",...){
   if(save_analysis){
@@ -1912,14 +2373,15 @@ setMethod("runAssayDifAnalysis","Analysis",function(obj,assay_name,assay_type="R
     output_dir<-getwd()
   }
   if(missing(scale)){scale=F}
-  assay_samples<-top_anno_sample_order
+  assay_samples<-intersect(top_anno_sample_order,colnames(methods::slot(obj@experiment,assay_name)@assay_data))
+  top_anno<-top_anno[match(assay_samples,top_anno_sample_order)]
+  top_anno_sample_order<-assay_samples
   sample_info<-obj@experiment@sample_info
   sample_info<-sample_info[sample_info$Assay==assay_type,]
   sample_info<-merge(sample_info,obj@experiment@patient_info,by=patient_id_column,all.x=T)
   sample_info<-sample_info[match(assay_samples,sample_info[[sample_id_column]]),]
 
   assay_data=methods::slot(obj@experiment,assay_name)@assay_data[,assay_samples]
-
   if(length(group_column)==1){
     profile_group_<-sample_info[[group_column]]
     if(any(is.na(profile_group_) | profile_group_=="")){
@@ -1946,8 +2408,6 @@ setMethod("runAssayDifAnalysis","Analysis",function(obj,assay_name,assay_type="R
                             output_dir=output_dir,...)
 
   obj@output$dif_analysis<-dif_analysis
-
-
   logFC_col="logFC"
   pval_col="pvalue"
   for(contrast in contrasts){
@@ -1956,7 +2416,7 @@ setMethod("runAssayDifAnalysis","Analysis",function(obj,assay_name,assay_type="R
     contrast_assay=dif_analysis[[contrast]][["contrast_assay"]]
     groups=dif_analysis[[contrast]][["contrast_group"]]
     contrast_statistics=dif_analysis[[contrast]][["contrast_results"]]
-    sig_assay=contrast_assay[contrast_statistics[[pval_col]]<=pval_cutoff,]
+    sig_assay=contrast_assay[!is.na(contrast_statistics[[pval_col]]) & contrast_statistics[[pval_col]]<=pval_cutoff,]
     top_anno_<-top_anno[match(colnames(sig_assay),assay_samples)]
     obj@output[[contrast]][["contrast_group"]]=groups
     obj@output[[contrast]][["contrast_statistics"]]=contrast_statistics
@@ -2000,6 +2460,25 @@ setMethod("runAssayDifAnalysis","Analysis",function(obj,assay_name,assay_type="R
             obj@output[[contrast]][[pathwayset]][["sankeyheatmap"]]=sankeyheatmap
             dev.off()
           }
+          if(save_analysis){
+            if(plot_specific_geneset){
+              if(is.null(specific_genesets)){
+                specific_genesets_<-names(gsea_res$sig_pathways)
+              } else{specific_genesets_=specific_genesets}
+              for(specific_geneset in specific_genesets_){
+                specific_geneset_dir<-file.path(pathwayset_output_dir,"specific_genesets",specific_geneset)
+                if(!dir.exists(specific_geneset_dir)){dir.create(specific_geneset_dir,recursive = T)}
+                specific_geneset_assay<-contrast_assay[intersect(gsea_res$sig_pathways[[specific_geneset]],rownames(contrast_assay)),,drop=F]
+                write.csv(specific_geneset_assay,file=file.path(specific_geneset_dir,"assay.csv"))
+                specific_geneset_row_anno_pvalue=-log10(contrast_statistics[rownames(specific_geneset_assay),"pvalue"])
+                specific_geneset_row_anno<-ComplexHeatmap::rowAnnotation(`-log10(P)`=ComplexHeatmap::anno_barplot(specific_geneset_row_anno_pvalue,gp=gpar(col=ifelse(specific_geneset_row_anno_pvalue>(-log10(0.05)),"red","green"))),annotation_name_side = "bottom")
+                specific_geneset_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(specific_geneset_assay))),name="zscore",top_annotation=top_anno_,right_annotation = specific_geneset_row_anno,column_split=groups,show_column_dend=F,show_row_names=T,row_names_gp = gpar(fontsize=5))
+                svg(filename = file.path(specific_geneset_dir,"heatmap.svg"),width = 20,height=20)
+                print(specific_geneset_heatmap)
+                dev.off()
+              }
+            }
+          }
         } else {
           if(save_analysis){
             svg(filename = file.path(pathwayset_output_dir,"volcano_plot.svg"),width = 10,height=10)
@@ -2014,6 +2493,18 @@ setMethod("runAssayDifAnalysis","Analysis",function(obj,assay_name,assay_type="R
       if(!dir.exists(contrast_output_dir)){dir.create(contrast_output_dir,recursive = T)}
       write.csv(sig_assay,file.path(contrast_output_dir,"sig_assay.csv"),row.names = T)
       write.csv(contrast_statistics,file.path(contrast_output_dir,"combined_statistics.csv"),row.names = T)
+    }
+  }
+  if(!is.null(specific_features)){
+    assertthat::are_equal(colnames(assay_data),sample_info[[sample_id_column]])
+    contrasts_<-lapply(contrasts,function(contr){unlist(strsplit(contr,"-"))})
+    features_df<-data.frame(as.data.frame(t(assay_data[specific_features,,drop=F])),sample_info[,c(group_column,block_column),drop=F])
+    if(!is.null(block_column)){features_df<-features_df[order(features_df[[group_column]],features_df[[block_column]]),];paired=T} else{paired=F}
+    features_df<-tidyr::pivot_longer(features_df,cols=specific_features,names_to="Feature",values_to = "Score")
+    features_p<-ggpubr::ggboxplot(features_df,x=group_column,y="Score",color = group_column, palette = "jco", add = "jitter",facet.by = "Feature")+ggpubr::stat_compare_means(method = "t.test",comparisons = contrasts_,paired = paired,label="")
+    obj@output$features_plot=features_p
+    if(save_analysis){
+      ggplot2::ggsave(filename = file.path(output_dir,"features_plot.svg"),plot = features_p,width = 20,height=8)
     }
   }
 
@@ -2059,16 +2550,16 @@ setMethod("runAssayDifAnalysis","Analysis",function(obj,assay_name,assay_type="R
 #' @param only_sig_genes logic. whether only significant genes will be used.
 #' @param save_analysis logic. whether to save results locally.
 #' @param output_dir character. output directory.
-#' @param log chracter. any comments.
+#' @param log character. any comments.
 #' @param ... list. parameter passed tp difAnalysis
 #'
 #' @return analysis. contain various contrast result.
 #' @export
 #'
 
-setGeneric("runAssayunSupervisedAnalysis",function(obj,assay_name,assay_type="RNA",scale=F,
+setGeneric("runAssayunSupervisedAnalysis",function(obj,assay_name,assay_type="RNASeq",scale=F,
                                                    stablecluster_method="combine",cutFUN=c(ClassDiscovery::cutHclust),clusters=NULL,nTimes=100,subSampleSize = 0.9,subFeatureSize=0.9,
-                                                   patient_id_column="Patient_ID",sample_id_column="Sample_ID",survival_column=NULL,status_column=NULL,survival_type=c("OS","PFS"),
+                                                   patient_id_column="Patient_ID",sample_id_column="Sample_ID",survival_column=NULL,status_column=NULL,survival_type=c("OS","PFS","P2DS"),
                                                    top_anno,top_anno_sample_order,palette=NULL,
                                                    test_method=c("ttest","limma"),contrasts=NULL,pval_cutoff = 0.05,
                                                    run_go=FALSE,run_gsea=FALSE,
@@ -2076,9 +2567,9 @@ setGeneric("runAssayunSupervisedAnalysis",function(obj,assay_name,assay_type="RN
                                                    cancergenes=cancergenes, pathwaylists=pathwaylists,specialpathwaylists=specialpathwaylists,
                                                    only_sig_genes=F,
                                                    save_analysis = T,output_dir,log="run unsupervised assay analysis.",...) standardGeneric("runAssayunSupervisedAnalysis"))
-setMethod("runAssayunSupervisedAnalysis","Analysis",function(obj,assay_name,assay_type="RNA",scale=F,
+setMethod("runAssayunSupervisedAnalysis","Analysis",function(obj,assay_name,assay_type="RNAseq",scale=F,
                                                              stablecluster_method="combine",cutFUN=c(ClassDiscovery::cutHclust),clusters=NULL,nTimes=100,subSampleSize = 0.9,subFeatureSize=0.9,
-                                                             patient_id_column="Patient_ID",sample_id_column="Sample_ID",survival_column=NULL,status_column=NULL,survival_type=c("OS","PFS"),
+                                                             patient_id_column="Patient_ID",sample_id_column="Sample_ID",survival_column=NULL,status_column=NULL,survival_type=c("OS","PFS","P2DS"),
                                                              top_anno,top_anno_sample_order,palette=NULL,
                                                              test_method=c("ttest","limma"),contrasts=NULL,pval_cutoff = 0.05,
                                                              run_go=FALSE,run_gsea=FALSE,
@@ -2089,7 +2580,6 @@ setMethod("runAssayunSupervisedAnalysis","Analysis",function(obj,assay_name,assa
 
   test_method=match.arg(test_method)
   survival_type=match.arg(survival_type)
-
   if(save_analysis){
     if(missing(output_dir)){
       output_dir<-file.path(obj@project,obj@analysis_name)
@@ -2099,13 +2589,13 @@ setMethod("runAssayunSupervisedAnalysis","Analysis",function(obj,assay_name,assa
     output_dir<-getwd()
   }
 
-  assay_samples<-top_anno_sample_order
+  assay_samples<-intersect(top_anno_sample_order,colnames(methods::slot(obj@experiment,assay_name)@assay_data))
+  top_anno<-top_anno[match(assay_samples,top_anno_sample_order)]
+  top_anno_sample_order<-assay_samples
   sample_info<-obj@experiment@sample_info
   sample_info<-sample_info[sample_info$Assay==assay_type,]
   sample_info<-merge(sample_info,obj@experiment@patient_info,by=patient_id_column,all.x=T)
-  if((!is.null(survival_column)) & (!is.null(status_column))){
-    colnames(sample_info)[match(c(survival_column,status_column),colnames(sample_info))]<-c(survival_type,"Status")
-  }
+
   sample_info<-sample_info[match(assay_samples,sample_info[[sample_id_column]]),]
 
   assay_data=methods::slot(obj@experiment,assay_name)@assay_data[,assay_samples]
@@ -2139,11 +2629,9 @@ setMethod("runAssayunSupervisedAnalysis","Analysis",function(obj,assay_name,assa
   clusters_<-clusters_[order(clusters_[["values"]]),]
   sample_info[["Cluster"]]<-as.character(clusters_[["ind"]])
 
-
   svg(filename = file.path(output_dir,"stablecluster_assay_heatmap.svg"),width = 20,height=12)
   ComplexHeatmap::draw(stablecluster_assay_heatmap)
   dev.off()
-
 
   stablecluster_assay_data<-unsupervised_assay[ComplexHeatmap::row_order(stablecluster_assay_heatmap),unlist(ComplexHeatmap::column_order(stablecluster_assay_heatmap))]
   obj@output[["stablecluster_assay_heatmap"]]=stablecluster_assay_heatmap
@@ -2154,7 +2642,7 @@ setMethod("runAssayunSupervisedAnalysis","Analysis",function(obj,assay_name,assa
   km_palette=RColorBrewer::brewer.pal(n=max(c(3,clusters)),name="Paired")[1:clusters]
   assertthat::are_equal(sample_info[[sample_id_column]],colnames(unsupervised_assay))
   if((!is.null(survival_column)) & (!is.null(status_column))){
-    cluster_km_plot<-utiltools::hCluster_Surv(heatmap=stablecluster_assay_heatmap,clinics=sample_info,survival_col = survival_type,status_col = "Status",palette = km_palette,legend=c(0.8,0.2))
+    cluster_km_plot<-utiltools::hCluster_Surv(heatmap=stablecluster_assay_heatmap,clinics=sample_info,survival_col = survival_column,status_col = status_column,palette = km_palette,legend=c(0.8,0.2))
     svg(filename = file.path(output_dir,"cluster_km_plot.svg"),width = 10,height=10)
     print(cluster_km_plot)
     dev.off()
@@ -2176,16 +2664,16 @@ setMethod("runAssayunSupervisedAnalysis","Analysis",function(obj,assay_name,assa
 
   obj@output[["dif_analysis"]]<-dif_analysis
 
-
   logFC_col="logFC"
   pval_col="pvalue"
   for(contrast in contrasts){
+
     contrast_output_dir<-file.path(output_dir,contrast)
     if(!dir.exists(contrast_output_dir)){dir.create(contrast_output_dir)}
     contrast_assay=dif_analysis[[contrast]][["contrast_assay"]]
     groups=dif_analysis[[contrast]][["contrast_group"]]
     contrast_statistics=dif_analysis[[contrast]][["contrast_results"]]
-    sig_assay=contrast_assay[contrast_statistics[[pval_col]]<=pval_cutoff,]
+    sig_assay=contrast_assay[!is.na(contrast_statistics[[pval_col]]) & contrast_statistics[[pval_col]]<=pval_cutoff,]
     obj@output[[contrast]][["contrast_group"]]=groups
     obj@output[[contrast]][["contrast_statistics"]]=contrast_statistics
     obj@output[[contrast]][["sig_assay"]]=sig_assay
@@ -2218,7 +2706,6 @@ setMethod("runAssayunSupervisedAnalysis","Analysis",function(obj,assay_name,assa
             obj@output[[contrast]][[pathwayset]][["volcano_plot"]]=volcano_plot
             dev.off()
           }
-
           pathway_gene_table_<-gsea_res$pathway_gene_table
           if(save_analysis){
             svg(filename = file.path(pathwayset_output_dir,"gseaheatmap.svg"),width = 20,height=12)
@@ -2294,7 +2781,7 @@ setMethod("runFusionAnalysis","Analysis",function(obj,top_fusions=30L,top_anno,t
   if(!is.null(sample_order)){
     assertthat::are_equal(sort(RNA_samples),sort(sample_order))
   }
-  fp<-utiltools::fusionPlot(fusions=fusions,top_filter=top_fusions,top_anno = top_anno,top_anno_sample_order = RNA_samples,type_col=type_col,sample_order=sample_order,annotate_frequence=annotate_frequence,output_dir=output_dir,...)
+  fp<-fusionPlot(fusions=fusions,top_filter=top_fusions,top_anno = top_anno,top_anno_sample_order = RNA_samples,type_col=type_col,sample_order=sample_order,annotate_frequence=annotate_frequence,output_dir=output_dir,...)
 
   obj@output$fusion_plot<-fp
   obj@log=paste(obj@log,"\n\n",Sys.time(),";\n\t",log,sep="")
@@ -2322,21 +2809,21 @@ setMethod("runFusionAnalysis","Analysis",function(obj,top_fusions=30L,top_anno,t
 #' @param overlapping_alt_counts_cutoff numeric. alt count cutoff for overlapping mutations(Baseline and TP2).
 #' @param nonoverlapping_ref_counts_cutoff numeric. ref count cutoff for nonoverlapping mutations(Baseline and TP2).
 #' @param nonoverlapping_alt_counts_cutoff numeric. alt count cutoff for nonoverlapping mutations(Baseline and TP2).
-#' @param gene_locs data.frame. gene infomation
+#' @param gene_locs data.frame. gene information
 #' @param cancer_genes character. cancer gene list.
 #' @param smg_genes character. SMG gene list.
-#' @param level character. arm level, cytoband level.
+#' @param driver_genes character. potential driver genes.
 #' @param pyclone_path character. path to pyclone
 #' @param save_analysis logic. whether to save results locally.
 #' @param output_dir character. output directory.
-#' @param log chracter. any comments.
+#' @param log character. any comments.
 #'
 #' @return analysis. contain various contrast result.
 #' @export
 #'
-setGeneric("runCloneAnalysis",function(obj,mutect_snps,sequenza_snps=NULL,sequenza_segments,purities,overlapping_ref_counts_cutoff=20,overlapping_alt_counts_cutoff=3,nonoverlapping_ref_counts_cutoff=100,nonoverlapping_alt_counts_cutoff=10,gene_locs,cancer_genes,smg_genes,level="arm",pyclone_path="/home/harryjerry/anaconda3/bin/pyclone-vi",save_analysis=F,output_dir,log="run sequenza clone analysis.") standardGeneric("runCloneAnalysis"))
-setMethod("runCloneAnalysis","Analysis",function(obj,mutect_snps,sequenza_snps=NULL,sequenza_segments,purities,overlapping_ref_counts_cutoff=20,overlapping_alt_counts_cutoff=3,nonoverlapping_ref_counts_cutoff=100,nonoverlapping_alt_counts_cutoff=10,gene_locs,cancer_genes,smg_genes,level="arm",pyclone_path="/home/harryjerry/anaconda3/bin/pyclone-vi",save_analysis=F,output_dir,log="run sequenza clone analysis."){
-  f<-function(l) {
+setGeneric("runCloneAnalysis",function(obj,mutect_snps,sequenza_snps=NULL,sequenza_segments,purities,overlapping_ref_counts_cutoff=20,overlapping_alt_counts_cutoff=3,nonoverlapping_ref_counts_cutoff=100,nonoverlapping_alt_counts_cutoff=10,gene_locs,cancer_genes,smg_genes,driver_genes,pyclone_path="/home/harryjerry/anaconda3/bin/pyclone-vi",save_analysis=F,output_dir,log="run sequenza clone analysis.") standardGeneric("runCloneAnalysis"))
+setMethod("runCloneAnalysis","Analysis",function(obj,mutect_snps,sequenza_snps=NULL,sequenza_segments,purities,overlapping_ref_counts_cutoff=20,overlapping_alt_counts_cutoff=3,nonoverlapping_ref_counts_cutoff=100,nonoverlapping_alt_counts_cutoff=10,gene_locs,cancer_genes,smg_genes,driver_genes,pyclone_path="/home/harryjerry/anaconda3/bin/pyclone-vi",save_analysis=F,output_dir,log="run sequenza clone analysis."){
+    f<-function(l) {
     if(length(l)==1){
       return(as.character(l))
     } else{
@@ -2350,14 +2837,15 @@ setMethod("runCloneAnalysis","Analysis",function(obj,mutect_snps,sequenza_snps=N
   }
 
   if(!missing(gene_locs)){
-    gene_locs<-utiltools::df2granges(gene_locs,xy=T,seqnames_col = "chromosome",meta_cols=c("Gene_name"))
+    gene_locs<-utiltools::df2granges(gene_locs,genome="hg19",seqlevelsStyle = "NCBI",simplified = T,xy=T,seqnames_col = "Chromosome",start_col = "Start",end_col = "End",meta_cols = c("Gene_Name","Biotype", "Cytoband"))
   }
 
   if(missing(purities)){ purities<-obj@experiment@purity_assay@assay_data}
-  sample_timepoint_info<-obj@experiment@sample_info %>% dplyr::filter(Assay=='DNA') %>% dplyr::select(c("Sample_ID","Patient_ID","Timepoint")) %>% tidyr::pivot_wider(id_cols = Patient_ID,names_from = Timepoint,values_from=Sample_ID,values_fn = f)
+  sample_timepoint_info<-obj@experiment@sample_info %>% dplyr::filter(Assay=='WES') %>% dplyr::select(c("Sample_ID","Patient_ID","Timepoint")) %>% tidyr::pivot_wider(id_cols = Patient_ID,names_from = Timepoint,values_from=Sample_ID,values_fn = f)
   sample_timepoint_info<-sample_timepoint_info[rowSums(!is.na(sample_timepoint_info[,-match("Patient_ID",colnames(sample_timepoint_info))]))>=2,]
   if(!is.null(sequenza_snps)){
-    sequenza_snps<-utiltoools::df2granges(sequenza_snps,xy=T,seqnames_col = "chrom",meta_cols = c("Sample_ID","ref_counts","alt_counts"))
+
+    sequenza_snps<-utiltools::df2granges(sequenza_snps,xy=T,seqnames_col = "chrom",meta_cols = c("Sample_ID","ref_counts","alt_counts"))
     sequenza_snps<-plyranges::join_overlap_left(sequenza_snps,gene_locs)
     sequenza_snps<-as.data.frame(sequenza_snps)
     sequenza_snps<-with(sequenza_snps,data.frame(Sample_ID=Sample_ID,
@@ -2366,7 +2854,7 @@ setMethod("runCloneAnalysis","Analysis",function(obj,mutect_snps,sequenza_snps=N
                                                  chrom=seqnames,
                                                  start=start,
                                                  end=end,
-                                                 gene=Gene_name,
+                                                 gene=Gene_Name,
                                                  ref_counts=ref_counts,
                                                  alt_counts=alt_counts))
     sequenza_snps<-sequenza_snps[!duplicated(sequenza_snps[,c("Sample_ID","Mutation_ID")]),]
@@ -2399,7 +2887,6 @@ setMethod("runCloneAnalysis","Analysis",function(obj,mutect_snps,sequenza_snps=N
       patient_sequenza_snps<-patient_sequenza_snps %>% dplyr::group_by(gene) %>% dplyr::filter(patient_refalt_counts==max(patient_refalt_counts))
       patient_sequenza_snps<-patient_sequenza_snps[,c("Sample_ID","Mutation_ID","chrom","start","end","gene","ref_counts","alt_counts")]
     }
-
     patient_mutect_snps<-mutect_snps[mutect_snps$Sample_ID %in% samples,c("Sample_ID","chrom","start","t_ref_count","t_alt_count","gene")]
     patient_mutect_snps<-with(patient_mutect_snps,data.frame(Sample_ID=Sample_ID,
                                                              Mutation_ID=paste(paste("chr",chrom,sep=""),start,sep=":"),
@@ -2413,7 +2900,7 @@ setMethod("runCloneAnalysis","Analysis",function(obj,mutect_snps,sequenza_snps=N
     nol_patient_mutect_snps<- patient_mutect_snps %>% dplyr::group_by(Mutation_ID) %>% dplyr::mutate(n_sample_inpatient=dplyr::n()) %>% dplyr::filter(n_sample_inpatient==1 & ref_counts>=nonoverlapping_ref_counts_cutoff & alt_counts>=nonoverlapping_alt_counts_cutoff)
     patient_mutect_snps<-rbind(ol_patient_mutect_snps,nol_patient_mutect_snps)
     patient_mutect_snps<-patient_mutect_snps[,c("Sample_ID","Mutation_ID","chrom","start","end","gene","ref_counts","alt_counts")]
-
+    patient_mutect_snps<-patient_mutect_snps[!duplicated(patient_mutect_snps[,c("Sample_ID","Mutation_ID")]),,drop=F]
     ref_counts_<-tidyr::pivot_wider(patient_mutect_snps,id_cols="Mutation_ID",names_from = "Sample_ID",values_from = "ref_counts",values_fn = function(i){mean(i,na.rm=T)})
     ref_counts_[,-1]<-ref_counts_[,-1] %>% dplyr::mutate_if(is.numeric,~ifelse(is.na(.x), as.integer(mean(.x, na.rm = TRUE)), .x))
     ref_counts<-tidyr::pivot_longer(ref_counts_,cols = unname(samples),names_to = "Sample_ID",values_to = "ref_counts")
@@ -2436,23 +2923,19 @@ setMethod("runCloneAnalysis","Analysis",function(obj,mutect_snps,sequenza_snps=N
     } else {patient_snps<-patient_mutect_snps}
     patient_snps[["is_cancer_gene"]]<-ifelse(patient_snps[["gene"]] %in% cancer_genes,TRUE,FALSE)
     patient_snps[["is_smg_gene"]]<-ifelse(patient_snps[["gene"]] %in% smg_genes,TRUE,FALSE)
-
+    patient_snps[["is_potential_driver_gene"]]<-ifelse(patient_snps[["gene"]] %in% driver_genes,TRUE,FALSE)
     patient_snps_<-patient_snps[,c("Sample_ID","chrom","start","end","ref_counts","alt_counts")]
     patient_snps_$chrom<-gsub("chr","",patient_snps_$chrom)
     patient_segments<-sequenza_segments[sequenza_segments$Sample_ID %in% samples,]
     patient_purities<-purities[purities$Sample_ID %in% samples,]
-
-    patient_snp_segments<-utiltools::prepare_snpsegments_for_pyclone_VI(snps = patient_snps_,segments = patient_segments,purities = patient_purities)
+    patient_snp_segments<-prepare_snpsegments_for_pyclone_VI(snps = patient_snps_,segments = patient_segments,purities = patient_purities)
     patient_snp_segments<-patient_snp_segments[patient_snp_segments$mutation_id %in% patient_snp_segments$mutation_id[duplicated(patient_snp_segments$mutation_id)],]
     patient_snp_segments$sample_id<-names(samples)[match(patient_snp_segments$sample_id,samples)]
     patient_snp_segments<-patient_snp_segments[complete.cases(patient_snp_segments),]
     patient_snp_segments_<-patient_snp_segments
     #patient_snp_segments$mutation_id<-gsub("chr","",patient_snp_segments$mutation_id)
-    patient_snp_segments_[['vaf']]<-with(patient_snp_segments_,round(alt_counts/(ref_counts*(tumour_content*major_cn)/((1-tumour_content)*normal_cn+(tumour_content*major_cn))+alt_counts)*100,2))
-    #mutation_vaf<-pivot_wider(patient_snp_segments_,id_cols = "mutation_id",names_from = "sample_id",values_from = "vaf",values_fill = 0)
-    #vaf_plot<-ggplot(mutation_vaf,aes(x=Baseline,y=TP2))+geom_point()
 
-    #browser()
+    patient_snp_segments_[['vaf']]<-with(patient_snp_segments_,round(alt_counts/(ref_counts*(tumour_content*major_cn)/((1-tumour_content)*normal_cn+(tumour_content*major_cn))+alt_counts)*100,2))
     patient_snp_segments_file<-file.path(patient_output_dir,"snp_segemnt.tsv")
     write.table(patient_snp_segments,patient_snp_segments_file,row.names = F,quote = F,sep="\t")
     tracerx_file<-file.path(patient_output_dir,"tracerx.h5")
@@ -2462,30 +2945,31 @@ setMethod("runCloneAnalysis","Analysis",function(obj,mutect_snps,sequenza_snps=N
     system(fit_command,intern = F)
     system(write_command,intern = F)
     prevalence<-read.csv(result_file,header=T,stringsAsFactors = F,check.names = F,sep='\t')
+    if(all(prevalence$cluster_id==0)) next
     prevalence$cluster<-prevalence$cluster_id+1L
     prevalence$cellular_prevalence<-prevalence$cellular_prevalence*100
+
     founding.cluster<-prevalence %>% dplyr::filter(sample_id=="Baseline") %>% dplyr::group_by(cluster) %>% dplyr::summarise(mean_ccf=mean(cellular_prevalence,na.rm=T))
     founding.cluster<-founding.cluster$cluster[which.max(founding.cluster$mean_ccf)]
     prevalence<-merge(prevalence,patient_snp_segments_,by=c("mutation_id","sample_id"),all.x=T)
     prevalence<-utiltools::addccf(prevalence)
     prevalence$ccf<-prevalence$ccf*100
-    mutation_anno<-patient_snps[,c("Mutation_ID","gene","is_cancer_gene","is_smg_gene")]
+    mutation_anno<-patient_snps[,c("Mutation_ID","gene","is_cancer_gene","is_smg_gene","is_potential_driver_gene")]
     mutation_anno<-mutation_anno[!duplicated(mutation_anno),]
     prevalence<-merge(prevalence,mutation_anno,by.x="mutation_id",by.y="Mutation_ID",all.x=T)
-
     mutation_vaf<-tidyr::pivot_wider(prevalence,id_cols = "mutation_id",names_from = "sample_id",values_from = "vaf",values_fill = 0)
     mutation_vaf<-merge(mutation_vaf,prevalence[,c("mutation_id","cluster")][!duplicated(prevalence[,c("mutation_id","cluster")]),],by="mutation_id")
-    vaf_plot<-ggplot2::ggplot(mutation_vaf,ggplot2::aes(x=Baseline,y=TP2,color=factor(cluster)))+ggplot2::geom_point()
+    colnames(mutation_vaf)[2:3]<-c("PRE","ON")
+    vaf_plot<-ggplot2::ggplot(mutation_vaf,ggplot2::aes(x=PRE,y=ON,color=factor(cluster)))+ggplot2::geom_point()
 
     ccf<-tidyr::pivot_wider(prevalence,id_cols=c('mutation_id',"cluster"),names_from = c("sample_id"),values_from = c("vaf"))
     ccf<-merge(ccf,mutation_anno,by.x="mutation_id",by.y="Mutation_ID",all.x=T)
-    ccf$driver_gene_rank<-ccf$is_cancer_gene*2+ccf$is_smg_gene
+    ccf$driver_gene_rank<-ccf$is_potential_driver_gene*3+ccf$is_cancer_gene*2+ccf$is_smg_gene
     ccf<-ccf[order(ccf$driver_gene_rank,decreasing = T),]
     ccf<-ccf %>% dplyr::group_by(cluster) %>% dplyr::mutate(fake_rank=dplyr::row_number())
-    ccf[["is_driver_gene"]]<-ifelse(ccf$is_cancer_gene & ccf$fake_rank<=3,TRUE,FALSE)
+    ccf[["is_driver_gene"]]<-ifelse(ccf$is_potential_driver_gene,TRUE,ifelse(ccf$is_cancer_gene & ccf$fake_rank<=3,TRUE,FALSE))
     ccf[["cluster"]]<-as.character(ccf[["cluster"]])
     ccf<-as.data.frame(ccf)
-    #browser()
     vaf.col.names<-names(samples)
     sample.groups<-names(samples)
     names(sample.groups)<-names(samples)
@@ -2536,28 +3020,7 @@ setMethod("runCloneAnalysis","Analysis",function(obj,mutect_snps,sequenza_snps=N
     obj@output[[patient]][["patient_snp_segments"]]<-patient_snp_segments
     obj@output[[patient]][["prevalence"]]<-prevalence
     obj@output[[patient]][["ccf"]]<-ccf
-    model = clonevol::infer.clonal.models(variants = ccf,
-                                          cluster.col.name = "cluster",
-                                          vaf.col.names=vaf.col.names,
-                                          sample.groups = sample.groups,
-                                          cancer.initiation.model='monoclonal',
-                                          subclonal.test = 'bootstrap',
-                                          subclonal.test.model = 'non-parametric',
-                                          num.boots = 1000,
-                                          founding.cluster = founding.cluster,
-                                          cluster.center = 'median',
-                                          ignore.clusters = NULL,
-                                          clone.colors = clone.colors,
-                                          min.cluster.vaf = 0.01,
-                                          # min probability that CCF(clone) is non-negative
-                                          sum.p = 0.05,
-                                          # alpha level in confidence interval estimate for CCF(clone)
-                                          alpha = 0.05)
-
-    if(model$num.matched.models==0){
-      cat("No clonal model found for",patient,"!")
-      ignore.clusters_<-ccf %>% dplyr::group_by(cluster) %>% dplyr::summarize(n_gene=dplyr::n())
-      ignore.clusters<-ignore.clusters_$cluster[which.min(ignore.clusters_$n_gene)]
+    tryCatch({
       model = clonevol::infer.clonal.models(variants = ccf,
                                             cluster.col.name = "cluster",
                                             vaf.col.names=vaf.col.names,
@@ -2568,7 +3031,7 @@ setMethod("runCloneAnalysis","Analysis",function(obj,mutect_snps,sequenza_snps=N
                                             num.boots = 1000,
                                             founding.cluster = founding.cluster,
                                             cluster.center = 'median',
-                                            ignore.clusters = ignore.clusters,
+                                            ignore.clusters = NULL,
                                             clone.colors = clone.colors,
                                             min.cluster.vaf = 0.01,
                                             # min probability that CCF(clone) is non-negative
@@ -2576,76 +3039,102 @@ setMethod("runCloneAnalysis","Analysis",function(obj,mutect_snps,sequenza_snps=N
                                             # alpha level in confidence interval estimate for CCF(clone)
                                             alpha = 0.05)
 
-    }
-    model<-clonevol::transfer.events.to.consensus.trees(model,ccf[ccf$is_driver_gene,],cluster.col.name = "cluster",event.col.name = "gene")
-    model <- clonevol::convert.consensus.tree.clone.to.branch(model, branch.scale = 'sqrt')
-    for(i in seq_len(length(model$matched$merged.trees))){ # guarantee Y chunk appear first
-      branches<-model$matched$merged.trees[[i]]$branches
-      branch_ord<-c(which(branches=="Y"),setdiff(order(branches),which(branches=="Y")))
-      model$matched$merged.trees[[i]]<-model$matched$merged.trees[[i]][branch_ord,]
-    }
-    #browser()
-    obj@output[[patient]][["model"]]<-model
+      if(model$num.matched.models==0){
+        cat("No clonal model found for",patient,"!")
+        ignore.clusters_<-ccf %>% dplyr::group_by(cluster) %>% dplyr::summarize(n_gene=dplyr::n())
+        ignore.clusters<-ignore.clusters_$cluster[which.min(ignore.clusters_$n_gene)]
+        model = clonevol::infer.clonal.models(variants = ccf,
+                                              cluster.col.name = "cluster",
+                                              vaf.col.names=vaf.col.names,
+                                              sample.groups = sample.groups,
+                                              cancer.initiation.model='monoclonal',
+                                              subclonal.test = 'bootstrap',
+                                              subclonal.test.model = 'non-parametric',
+                                              num.boots = 1000,
+                                              founding.cluster = founding.cluster,
+                                              cluster.center = 'median',
+                                              ignore.clusters = ignore.clusters,
+                                              clone.colors = clone.colors,
+                                              min.cluster.vaf = 0.01,
+                                              # min probability that CCF(clone) is non-negative
+                                              sum.p = 0.05,
+                                              # alpha level in confidence interval estimate for CCF(clone)
+                                              alpha = 0.05)
 
-    modelclone_plot<-clonevol::plot.clonal.models(model,
-                                                  # box plot parameters
-                                                  box.plot = TRUE,
-                                                  fancy.boxplot = TRUE,
-                                                  fancy.variant.boxplot.highlight = 'is_driver_gene',
-                                                  fancy.variant.boxplot.highlight.shape = 21,
-                                                  fancy.variant.boxplot.highlight.fill.color = 'red',
-                                                  fancy.variant.boxplot.highlight.color = 'black',
-                                                  fancy.variant.boxplot.highlight.note.col.name = 'gene',
-                                                  fancy.variant.boxplot.highlight.note.color = 'blue',
-                                                  fancy.variant.boxplot.highlight.note.size = 2,
-                                                  fancy.variant.boxplot.jitter.alpha = 1,
-                                                  fancy.variant.boxplot.jitter.center.color = 'grey50',
-                                                  fancy.variant.boxplot.base_size = 12,
-                                                  fancy.variant.boxplot.plot.margin = 1,
-                                                  fancy.variant.boxplot.vaf.suffix = '.VAF',
-                                                  # bell plot parameters
-                                                  clone.shape = 'bell',
-                                                  bell.event = TRUE,
-                                                  bell.event.label.color = 'blue',
-                                                  bell.event.label.angle = 60,
-                                                  clone.time.step.scale = 1,
-                                                  bell.curve.step = 2,
-                                                  # node-based consensus tree parameters
-                                                  merged.tree.plot = TRUE,
-                                                  tree.node.label.split.character = NULL,
-                                                  tree.node.shape = 'circle',
-                                                  tree.node.size = 30,
-                                                  tree.node.text.size = 0.5,
-                                                  merged.tree.node.size.scale = 1.25,
-                                                  merged.tree.node.text.size.scale = 2.5,
-                                                  merged.tree.cell.frac.ci = FALSE,
-                                                  # branch-based consensus tree parameters
-                                                  merged.tree.clone.as.branch = TRUE,
-                                                  mtcab.event.sep.char = ',',
-                                                  mtcab.branch.text.size = 1,
-                                                  mtcab.branch.width = 0.75,
-                                                  mtcab.node.size = 3,
-                                                  mtcab.node.label.size = 1,
-                                                  mtcab.node.text.size = 1.5,
-                                                  # cellular population parameters
-                                                  cell.plot = TRUE,
-                                                  num.cells = 100,
-                                                  cell.border.size = 0.25,
-                                                  cell.border.color = 'black',
-                                                  clone.grouping = 'horizontal',
-                                                  #meta-parameters
-                                                  scale.monoclonal.cell.frac = TRUE,
-                                                  show.score = FALSE,
-                                                  cell.frac.ci = TRUE,
-                                                  disable.cell.frac = FALSE,
-                                                  # output figure parameters
-                                                  out.dir = patient_output_dir,
-                                                  out.format = 'pdf',
-                                                  overwrite.output = TRUE,
-                                                  width = 12,
-                                                  height = 4,
-                                                  # vector of width scales for each panel from left to right
-                                                  panel.widths = c(3,4,2,4,2))
+      }
+      model<-clonevol::transfer.events.to.consensus.trees(model,ccf[ccf$is_driver_gene,],cluster.col.name = "cluster",event.col.name = "gene")
+      model <- clonevol::convert.consensus.tree.clone.to.branch(model, branch.scale = 'sqrt')
+      for(i in seq_len(length(model$matched$merged.trees))){ # guarantee Y chunk appear first
+        branches<-model$matched$merged.trees[[i]]$branches
+        branch_ord<-c(which(branches=="Y"),setdiff(order(branches),which(branches=="Y")))
+        model$matched$merged.trees[[i]]<-model$matched$merged.trees[[i]][branch_ord,]
+      }
+      #browser()
+      obj@output[[patient]][["model"]]<-model
+
+      modelclone_plot<-clonevol::plot.clonal.models(model,
+                                                    # box plot parameters
+                                                    box.plot = TRUE,
+                                                    fancy.boxplot = TRUE,
+                                                    fancy.variant.boxplot.highlight = 'is_driver_gene',
+                                                    fancy.variant.boxplot.highlight.shape = 21,
+                                                    fancy.variant.boxplot.highlight.fill.color = 'red',
+                                                    fancy.variant.boxplot.highlight.color = 'black',
+                                                    fancy.variant.boxplot.highlight.note.col.name = 'gene',
+                                                    fancy.variant.boxplot.highlight.note.color = 'blue',
+                                                    fancy.variant.boxplot.highlight.note.size = 2,
+                                                    fancy.variant.boxplot.jitter.alpha = 1,
+                                                    fancy.variant.boxplot.jitter.center.color = 'grey50',
+                                                    fancy.variant.boxplot.base_size = 12,
+                                                    fancy.variant.boxplot.plot.margin = 1,
+                                                    fancy.variant.boxplot.vaf.suffix = '.VAF',
+                                                    # bell plot parameters
+                                                    clone.shape = 'bell',
+                                                    bell.event = TRUE,
+                                                    bell.event.label.color = 'blue',
+                                                    bell.event.label.angle = 60,
+                                                    clone.time.step.scale = 1,
+                                                    bell.curve.step = 2,
+                                                    # node-based consensus tree parameters
+                                                    merged.tree.plot = TRUE,
+                                                    tree.node.label.split.character = NULL,
+                                                    tree.node.shape = 'circle',
+                                                    tree.node.size = 30,
+                                                    tree.node.text.size = 0.5,
+                                                    merged.tree.node.size.scale = 1.25,
+                                                    merged.tree.node.text.size.scale = 2.5,
+                                                    merged.tree.cell.frac.ci = FALSE,
+                                                    # branch-based consensus tree parameters
+                                                    merged.tree.clone.as.branch = TRUE,
+                                                    mtcab.event.sep.char = ',',
+                                                    mtcab.branch.text.size = 1,
+                                                    mtcab.branch.width = 0.75,
+                                                    mtcab.node.size = 3,
+                                                    mtcab.node.label.size = 1,
+                                                    mtcab.node.text.size = 1.5,
+                                                    # cellular population parameters
+                                                    cell.plot = TRUE,
+                                                    num.cells = 100,
+                                                    cell.border.size = 0.25,
+                                                    cell.border.color = 'black',
+                                                    clone.grouping = 'horizontal',
+                                                    #meta-parameters
+                                                    scale.monoclonal.cell.frac = TRUE,
+                                                    show.score = FALSE,
+                                                    cell.frac.ci = TRUE,
+                                                    disable.cell.frac = FALSE,
+                                                    # output figure parameters
+                                                    out.dir = patient_output_dir,
+                                                    out.format = 'pdf',
+                                                    overwrite.output = TRUE,
+                                                    width = 12,
+                                                    height = 4,
+                                                    # vector of width scales for each panel from left to right
+                                                    panel.widths = c(3,4,2,4,2))
+    },error=function(e) {
+      print(e)
+    },
+    finally=next)
   }
   obj@output[["sample_timepoint_info"]]<-sample_timepoint_info
   obj@log=paste(obj@log,"\n\n",Sys.time(),";\n\t",log,sep="")
@@ -2659,7 +3148,7 @@ setMethod("runCloneAnalysis","Analysis",function(obj,mutect_snps,sequenza_snps=N
 #' @param obj analysis. an analysis object.
 #' @param icg_info data.frame. immune checkpoint gene information
 #' @param gene_id_column character. gene ic column from icg_info
-#' @score_method character. method passed to utiltools::geneset_activity, used for calculation of activity
+#' @param score_method character. method passed to utiltools::geneset_activity, used for calculation of activity
 #' @param survival_column character. suvival days column from patient_info
 #' @param status_column character. suvival status column from patient_info
 #' @param top_anno HeatmapAnnotation. top annotation, passed to heatmap.
@@ -2672,7 +3161,7 @@ setMethod("runCloneAnalysis","Analysis",function(obj,mutect_snps,sequenza_snps=N
 #' @param save_analysis logic. whether to save results locally.
 #' @param output_dir character. output directory.
 #' @param log chracter. any comments.
-#'
+#' @param ...  parameter passed to ComplexHeatmatp::Heatmap
 #' @return analysis. contain various contrast result.
 #' @export
 #'
@@ -2684,7 +3173,8 @@ setGeneric("runICGDifAnalysis",function(obj,
                                         group_column,block_column,contrasts,
                                         pval_cutoff = 0.05,
                                         save_analysis = T,output_dir,
-                                        log="run immune checkpoint differential gene expression analysis.") standardGeneric("runICGDifAnalysis"))
+                                        log="run immune checkpoint differential gene expression analysis.",
+                                        ...) standardGeneric("runICGDifAnalysis"))
 setMethod("runICGDifAnalysis","Analysis",function(obj,
                                                   icg_info,gene_id_column="Hgnc_Symbol",
                                                   score_method="zscore",
@@ -2693,7 +3183,8 @@ setMethod("runICGDifAnalysis","Analysis",function(obj,
                                                   group_column,block_column,contrasts,
                                                   pval_cutoff = 0.05,
                                                   save_analysis = T,output_dir,
-                                                  log="run immune checkpoint differential gene expression analysis."){
+                                                  log="run immune checkpoint differential gene expression analysis.",
+                                                  ...){
 
   if(save_analysis){
     if(missing(output_dir)){
@@ -2769,7 +3260,7 @@ setMethod("runICGDifAnalysis","Analysis",function(obj,
       }
       group_results<-data.frame(group_results,P.Value=group_statistics)
       neg_log_pvalue=-log10(group_statistics)
-      icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(icg))),name="zscores_icg",top_annotation = top_anno,row_split=icg_info_$Immune_Checkpoint,column_split = sample_info[[group_column]])
+      icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(icg))),name="zscores_icg",top_annotation = top_anno,row_split=icg_info_$Immune_Checkpoint,column_split = sample_info[[group_column]],...)
       row_anno<-rowAnnotation(Function=anno_block(gp=gpar(fill=c("red","blue","green")),labels=names(ComplexHeatmap::row_order(icg_heatmap))),
                               `-log10(p)`=ComplexHeatmap::row_anno_barplot(neg_log_pvalue,gp=gpar(fill=ifelse(neg_log_pvalue>(-log10(pval_cutoff)),"red","gray")),ylim=c(0,max(c(neg_log_pvalue,-log10(pval_cutoff)))+0.5)),
                               Score=anno_link(align_to=icg_info_$Immune_Checkpoint,which="row",panel_fun=panel_fun,size=unit(3,"cm"),width=unit(4,"cm")),
@@ -2778,7 +3269,7 @@ setMethod("runICGDifAnalysis","Analysis",function(obj,
       fontsize[neg_log_pvalue>=(-log10(pval_cutoff))]<-8
       fontface=rep("plain",nrow(icg))
       fontface[neg_log_pvalue>=(-log10(pval_cutoff))]<-"bold"
-      icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(icg))),name="zscores_icg",top_annotation = top_anno,row_split=icg_info_$Immune_Checkpoint,right_annotation = row_anno,column_split = sample_info[[group_column]],row_names_gp = gpar(fontsize=fontsize,fontface=fontface),row_title_gp = gpar(fontsize=0),row_names_side = "left")
+      icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(icg))),name="zscores_icg",top_annotation = top_anno,row_split=icg_info_$Immune_Checkpoint,right_annotation = row_anno,column_split = sample_info[[group_column]],row_names_gp = gpar(fontsize=fontsize,fontface=fontface),row_title_gp = gpar(fontsize=0),row_names_side = "left",...)
       obj@output$contrasts$icg_heatmap<-icg_heatmap
       obj@output$contrasts$statistics<-group_results
       if(save_analysis){
@@ -2805,7 +3296,7 @@ setMethod("runICGDifAnalysis","Analysis",function(obj,
         contrast_group_results[[paste(contrast,"P.Value",sep=":")]]<-contrast_group_statistics
         contrast_top_anno<-top_anno[match(subset_sample_info$Sample_ID,RNA_samples),]
         neg_log_pvalue=-log10(group_statistics)
-        icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(icg))),name="zscores_icg",top_annotation = top_anno,row_split=icg_info_$Immune_Checkpoint,column_split = sample_info[[group_column]])
+        icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(icg))),name="zscores_icg",top_annotation = top_anno,row_split=icg_info_$Immune_Checkpoint,column_split = sample_info[[group_column]],...)
         row_anno<-rowAnnotation(Function=anno_block(gp=gpar(fill=c("red","blue","green")),labels=names(ComplexHeatmap::row_order(icg_heatmap))),
                                 `-log10(p)`=ComplexHeatmap::row_anno_barplot(neg_log_pvalue,gp=gpar(fill=ifelse(neg_log_pvalue>(-log10(pval_cutoff)),"red","gray")),ylim=c(0,max(c(neg_log_pvalue,-log10(pval_cutoff)))+0.5)),
                                 Score=anno_link(align_to=icg_info_$Immune_Checkpoint,which="row",panel_fun=panel_fun,size=unit(3,"cm"),width=unit(4,"cm")),
@@ -2814,7 +3305,7 @@ setMethod("runICGDifAnalysis","Analysis",function(obj,
         fontsize[neg_log_pvalue>=(-log10(pval_cutoff))]<-8
         fontface=rep("plain",nrow(icg))
         fontface[neg_log_pvalue>=(-log10(pval_cutoff))]<-"bold"
-        contrast_icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(subset_icg))),name="zscores_icg",top_annotation = contrast_top_anno,column_split = subset_sample_info[[group_column]],row_split=icg_info_$Immune_Checkpoint,right_annotation = row_anno,row_names_gp = gpar(fontsize=fontsize,fontface=fontface))
+        contrast_icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(subset_icg))),name="zscores_icg",top_annotation = contrast_top_anno,column_split = subset_sample_info[[group_column]],row_split=icg_info_$Immune_Checkpoint,right_annotation = row_anno,row_names_gp = gpar(fontsize=fontsize,fontface=fontface),...)
 
         obj@output$contrasts[[contrast]]$sample_info<-subset_sample_info
         obj@output$contrasts[[contrast]]$icg<-subset_icg
@@ -2850,7 +3341,7 @@ setMethod("runICGDifAnalysis","Analysis",function(obj,
       }
       group_results<-data.frame(group_results,P.Value=group_statistics)
       neg_log_pvalue=-log10(group_statistics)
-      icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(icg))),name="zscores_icg",top_annotation = top_anno,row_split=icg_info_$Immune_Checkpoint,column_split = sample_info[[group_column]])
+      icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(icg))),name="zscores_icg",top_annotation = top_anno,row_split=icg_info_$Immune_Checkpoint,column_split = sample_info[[group_column]],...)
       row_anno<-rowAnnotation(Function=anno_block(gp=gpar(fill=c("red","blue","green")),labels=names(ComplexHeatmap::row_order(icg_heatmap))),
                               `-log10(p)`=ComplexHeatmap::row_anno_barplot(neg_log_pvalue,gp=gpar(fill=ifelse(neg_log_pvalue>(-log10(pval_cutoff)),"red","gray")),ylim=c(0,max(c(neg_log_pvalue,-log10(pval_cutoff)))+0.5)),
                               Score=anno_link(align_to=icg_info_$Immune_Checkpoint,which="row",panel_fun=panel_fun,size=unit(3,"cm"),width=unit(4,"cm")),
@@ -2859,7 +3350,7 @@ setMethod("runICGDifAnalysis","Analysis",function(obj,
       fontsize[neg_log_pvalue>=(-log10(pval_cutoff))]<-8
       fontface=rep("plain",nrow(icg))
       fontface[neg_log_pvalue>=(-log10(pval_cutoff))]<-"bold"
-      icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(icg))),name="zscores_icg",top_annotation = top_anno,column_split = sample_info[[group_column]],row_split=icg_info_$Immune_Checkpoint,right_annotation = row_anno,row_names_gp = gpar(fontsize=fontsize,fontface=fontface))
+      icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(icg))),name="zscores_icg",top_annotation = top_anno,column_split = sample_info[[group_column]],row_split=icg_info_$Immune_Checkpoint,right_annotation = row_anno,row_names_gp = gpar(fontsize=fontsize,fontface=fontface),...)
 
       obj@output$contrasts$icg_heatmap<-icg_heatmap
       obj@output$contrasts$statistics<-group_results
@@ -2886,7 +3377,7 @@ setMethod("runICGDifAnalysis","Analysis",function(obj,
         contrast_group_results[[paste(contrast,"P.Value",sep=":")]]<-contrast_group_statistics
         contrast_top_anno<-top_anno[match(subset_sample_info$Sample_ID,RNA_samples),]
         neg_log_pvalue=-log10(group_statistics)
-        icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(icg))),name="zscores_icg",top_annotation = top_anno,row_split=icg_info_$Immune_Checkpoint,column_split = sample_info[[group_column]])
+        icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(icg))),name="zscores_icg",top_annotation = top_anno,row_split=icg_info_$Immune_Checkpoint,column_split = sample_info[[group_column]],...)
         row_anno<-rowAnnotation(Function=anno_block(gp=gpar(fill=c("red","blue","green")),labels=names(ComplexHeatmap::row_order(icg_heatmap))),
                                 `-log10(p)`=ComplexHeatmap::row_anno_barplot(neg_log_pvalue,gp=gpar(fill=ifelse(neg_log_pvalue>(-log10(pval_cutoff)),"red","gray")),ylim=c(0,max(c(neg_log_pvalue,-log10(pval_cutoff)))+0.5)),
                                 Score=anno_link(align_to=icg_info_$Immune_Checkpoint,which="row",panel_fun=panel_fun,size=unit(3,"cm"),width=unit(4,"cm")),
@@ -2895,7 +3386,7 @@ setMethod("runICGDifAnalysis","Analysis",function(obj,
         fontsize[neg_log_pvalue>=(-log10(pval_cutoff))]<-8
         fontface=rep("plain",nrow(icg))
         fontface[neg_log_pvalue>=(-log10(pval_cutoff))]<-"bold"
-        contrast_icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(subset_icg))),name="zscores_icg",top_annotation = contrast_top_anno,column_split = subset_sample_info[[group_column]],row_split=icg_info_$Immune_Checkpoint,right_annotation = row_anno,row_names_gp = gpar(fontsize=fontsize,fontface=fontface))
+        contrast_icg_heatmap<-ComplexHeatmap::Heatmap(t(scale(t(subset_icg))),name="zscores_icg",top_annotation = contrast_top_anno,column_split = subset_sample_info[[group_column]],row_split=icg_info_$Immune_Checkpoint,right_annotation = row_anno,row_names_gp = gpar(fontsize=fontsize,fontface=fontface),...)
 
         obj@output$contrasts[[contrast]]$sample_info<-subset_sample_info
         obj@output$contrasts[[contrast]]$icg<-subset_icg
@@ -3020,3 +3511,294 @@ setMethod("runAssaySurvivalSignatureAnalysis","Analysis",function(obj,
   return(obj)
 }
 )
+
+
+#' signatureAnalysis
+#'
+#' signature assay anlysis
+#'
+#' @param assay data.frame. assay data.
+#' @param scale logic. whether to scale assay.
+#' @param assay_name character. assay name.
+#' @param sample_info data.frame. sample information.
+#' @param patient_id_column character. column for patient id.
+#' @param sample_id_column character. column for sample id.
+#' @param group_column character. column for group.
+#' @param term_cutoff numeric. minimal number of samples required for a term, a term with less than term_cutoff will be skipped.
+#' @param top_anno HeatmapAnnotation. top annotation, passed to heatmap.
+#' @param top_anno_sample_order character. sample orders for top annotation.
+#' @param test_method character. test method, such as "ttest" or "limma".
+#' @param above_average_pct_cutoff numeric. percentage cutoff of samples in group expressed above average expression.
+#' @param below_average_pct_cutoff numeric. percentage cutoff of samples in group expressed below average expression.
+#' @param pval_cutoff numeric. p value cutoff for significance.
+#' @param logFold_cutoff numeric. logFold cutoff for significance.
+#' @param padj_cutoff numeric. adjusted p value (BH method) cutoff for significance.
+#' @param sign_filter character. if "Pos" only feature with positive logFold will be selected, if "Neg" only feature with negative logFold will be selected, "Both" will selected both genes.
+#' @param palette character. colors used for heatmap.
+#' @param ora logic. whether to run ora analysis.
+#' @param ont character. ontology of GO, default "BP".
+#' @param enrichGO_params list. parameters passed to enrichGO.
+#' @param ora_padj_cutoff numeric.  padj cutoff for enrichGO result.
+#' @param width numeric. heatmap width.
+#' @param height numeric. heatmap height.
+#' @param output_dir character. output directory.
+#' @param ... list. parameter passed tp ComplexHeatmap::Heatmap
+#'
+#' @return list. contain various contrast result.
+#' @export
+#'
+
+signatureAnalysis<-function(assay,scale=F,assay_name="assay",
+                      sample_info,patient_id_column="Patient_ID",sample_id_column="Sample_ID",group_column,term_cutoff=3,
+                      top_anno,top_anno_sample_order,
+                      test_method=c("ttest","limma"),above_average_pct_cutoff=NULL,below_average_pct_cutoff=NULL,pval_cutoff = 0.05,logFold_cutoff=NULL,padj_cutoff=NULL,sign_filter=c("Both","Pos","Neg"),
+                      palette=NULL,
+                      ora=FALSE,ont="BP",enrichGO_params=NULL,ora_padj_cutoff=0.05,
+                      width=40,height=40,
+                      output_dir,...){
+  sign_filter<-match.arg(sign_filter)
+  output<-list()
+  if(scale){
+    assay<-as.data.frame(t(scale(t(assay))))
+  }
+  test_method=match.arg(test_method)
+  assay_samples<-top_anno_sample_order
+  sample_info<-merge(data.frame(Sample_ID=assay_samples),sample_info,by=sample_id_column,all.x=T)
+  sample_info<-sample_info[match(assay_samples, sample_info$Sample_ID),]
+
+  assay<-as.data.frame(assay[,assay_samples])
+  feature_order=rownames(assay)
+
+  group_terms<-names(table(sample_info[[group_column]])[table(sample_info[[group_column]])>=term_cutoff])
+
+  if(is.null(palette)){palette=c("blue","white","red")}
+  col=circlize::colorRamp2(breaks=c(min(t(scale(t(assay)))),0,max(t(scale(t(assay))))),colors = palette)
+
+  significant_features<-data.frame(Term="",Gene="",above_average_pct=0.0,below_average_pct=0.0,pval=0.0,term_mean=0.0,rest_mean=0.0,logfold=0.0,padj=0.0,above_average_pct_filter=T,pval_filter=T,logfold_filter=T,padj_filter=T,below_average_pct_filter=T,final_filter=T)[FALSE,]
+  for(group_term in group_terms){
+    print(paste("Compare ",group_term, " and the Rest.",sep=" "))
+    groups<-rep("Rest",nrow(sample_info))
+    groups[sample_info[[group_column]]==group_term]<-group_term
+    above_average_pcts<-apply(assay,1,function(rowdata){data=data.frame(Value=as.numeric(rowdata),Group=groups);mean_=mean(data$Value,na.rm=T);return(sum(data$Value[data$Group==group_term]>=mean_,na.rm=T)/length(data$Value[data$Group==group_term]))})
+    assertthat::are_equal(feature_order,names(above_average_pcts))
+    below_average_pcts<-1-above_average_pcts
+    assertthat::are_equal(feature_order,names(below_average_pcts))
+    term_statistics<-data.frame(above_average_pct=above_average_pcts,below_average_pct=below_average_pcts,row.names = names(above_average_pcts))
+    if(test_method=="ttest"){
+      pvals<-apply(assay,1,function(rowdata){data=data.frame(Value=as.numeric(rowdata),Group=groups);test=stats::t.test(Value~Group,data=data);return(test$p.value)})
+      assertthat::are_equal(feature_order,names(pvals))
+      term_statistics$pval<-pvals[rownames(term_statistics)]
+      term_mean=rowMeans(assay[,groups==group_term,drop=F],na.rm=T)
+      rest_mean=rowMeans(assay[,groups!=group_term,drop=F],na.rm=T)
+      logfold<-term_mean-rest_mean
+      assertthat::are_equal(feature_order,names(logfold))
+      term_statistics$term_mean<-term_mean[rownames(term_statistics)]
+      term_statistics$rest_mean<-rest_mean[rownames(term_statistics)]
+      term_statistics$logfold<-logfold[rownames(term_statistics)]
+      padjs<-p.adjust(pvals,method="BH")
+      assertthat::are_equal(feature_order,names(padjs))
+      term_statistics$padj<-padjs[rownames(term_statistics)]
+    }
+    if(test_method=="limma"){
+      contrast=paste(group_term,"Rest",sep="-")
+      statistics<-utiltools::dge_limma(assay,is_rawcount = F,is_logged = T,normalize = F,sample_frequency_threshold = 1,clinic_info =data.frame(Sample_ID=colnames(assay),Group=groups),ID_col = "Sample_ID",group_col = "Group",contrasts = contrast,method ="limma_trend")
+      statistics<-statistics$statistics
+      term_statistics<-term_statistics[rownames(statistics),]
+      term_statistics$pval<-statistics[[paste(contrast,"P.Value",sep=":")]]
+      term_statistics$term_mean<-statistics[[paste(group_term,"mean",sep="_")]]
+      term_statistics$rest_mean<-statistics[["Rest_mean"]]
+      term_statistics$logfold<-statistics[[paste(contrast,"logFC",sep=":")]]
+      term_statistics$padj<-statistics[[paste(contrast,"adj.P.Val",sep=":")]]
+    }
+
+    if(!is.null(above_average_pct_cutoff)){term_statistics$above_average_pct_filter<-(term_statistics$above_average_pct>=above_average_pct_cutoff)} else {term_statistics$above_average_pct_filter=TRUE}
+    if(!is.null(below_average_pct_cutoff)){term_statistics$below_average_pct_filter<-(term_statistics$below_average_pct>=below_average_pct_cutoff)} else{term_statistics$below_average_pct_filter=TRUE}
+
+    term_statistics$pval_filter<-term_statistics$pval<=pval_cutoff
+    if(!is.null(logFold_cutoff)){
+      if(sign_filter=="Both"){
+        logfold_filter<-abs(term_statistics$logfold)>=logFold_cutoff
+      }
+      if(sign_filter=="Pos"){
+        logfold_filter<<-term_statistics$ogfold>=logFold_cutoff
+      }
+      if(sign_filter=="Neg"){
+        logfold_filter<<-term_statistics$logfold<=(-logFold_cutoff)
+      }
+      term_statistics$logfold_filter<-logfold_filter
+    } else{
+      term_statistics$logfold_filter<-TRUE
+    }
+    if(!is.null(padj_cutoff)){
+      padj_filter<-term_statistics$padj<=padj_cutoff
+      term_statistics$padj_filter<-padj_filter
+    } else {
+      term_statistics$padj_filter<-TRUE
+    }
+
+    term_statistics$final_filter<-(term_statistics$above_average_pct_filter | term_statistics$below_average_pct_filter) & term_statistics$pval_filter & logfold_filter & term_statistics$padj_filter
+    term_significant_features<-data.frame(Term=group_term,
+                                           Gene=rownames(term_statistics)[term_statistics$final_filter],
+                                           term_statistics[term_statistics$final_filter,,drop=F])
+    significant_features<-rbind(significant_features,term_significant_features)
+  }
+
+  significant_features<-significant_features %>% dplyr::group_by(Gene) %>% dplyr::filter(pval==min(pval,na.rm=T))
+  significant_features<- significant_features[order(significant_features$Term,significant_features$logfold),,drop=F]
+  subset_sample_info<-sample_info[sample_info[[group_column]] %in% group_terms,,drop=F]
+  subset_sample_info<-subset_sample_info[order(subset_sample_info[[group_column]]),,drop=F]
+  subset_assay<-assay[significant_features$Gene,subset_sample_info[[sample_id_column]]]
+
+
+  #ORA analysis
+  if(ora){
+    ora_statistics<-list()
+    ora_dotplots<-list()
+    for(group_term in group_terms){
+      term_significant_features<-significant_features[significant_features$Term==group_term,]
+      term_up_genes<-term_significant_features$Gene[term_significant_features$logfold>=logFold_cutoff]
+      term_down_genes<-term_significant_features$Gene[term_significant_features$logfold<=(-logFold_cutoff)]
+      background_genes<-setdiff(feature_order,c(term_up_genes,term_down_genes))
+
+      go_up<-do.call(clusterProfiler::enrichGO, c(list(gene=term_up_genes,OrgDb = org.Hs.eg.db::org.Hs.eg.db, keyType = "SYMBOL",ont= ont),enrichGO_params))
+      go_down<-do.call(clusterProfiler::enrichGO, c(list(gene=term_down_genes,OrgDb = org.Hs.eg.db::org.Hs.eg.db, keyType = "SYMBOL",ont= ont),enrichGO_params))
+      up_results<-go_up@result[go_up@result$p.adjust<=ora_padj_cutoff,]
+      down_results<-go_down@result[go_down@result$p.adjust<=ora_padj_cutoff,]
+      if(nrow(up_results)==0 & nrow(down_results)==0){
+        cat("No significant up/down GO term found!")
+        return(NULL)
+      }
+      go_df<-data.frame(Cluster=factor(rep(c("Up_regulated","Down_regulated"),times=c(nrow(up_results),nrow(down_results)))),
+                        Category="GO:BP",
+                        ID=c(up_results$ID,down_results$ID),
+                        Description=c(up_results$Description,down_results$Description),
+                        p.adjust=c(up_results$p.adjust,down_results$p.adjust),
+                        query_size=as.integer(c(gsub("[0-9]+\\/","",up_results$GeneRatio,perl=T),gsub("[0-9]+\\/","",down_results$GeneRatio,perl=T))),
+                        Count=c(up_results$Count,down_results$Count),
+                        term_size=as.integer(c(gsub("\\/[0-9]+","",up_results$BgRatio,perl=T),gsub("\\/[0-9]+","",down_results$BgRatio,perl=T))),
+                        effective_domain_size=as.integer(c(gsub("[0-9]+\\/","",up_results$BgRatio,perl=T),gsub("[0-9]+\\/","",down_results$BgRatio,perl=T))),
+                        geneID=c(up_results$geneID,down_results$geneID),
+                        GeneRatio=c(up_results$GeneRatio,down_results$GeneRatio),
+                        BgRatio=c(up_results$BgRatio,down_results$BgRatio)
+      )
+      go_df<-go_df[!duplicated(go_df$ID),]
+      row.names(go_df) = go_df$ID
+      ora_statistics[[group_term]]<-go_df
+      go_df_cluster = new("compareClusterResult", compareClusterResult = go_df)
+      ora_dotplots[[group_term]]<-enrichplot::dotplot(go_df_cluster,showCategory=3,font.size=8)
+    }
+    panel_fun = function(index, levels) {
+      grid.draw(ggplotGrob(ora_dotplots[[levels]]))
+    }
+    ora_anno =ComplexHeatmap::rowAnnotation(ORA=anno_link(align_to = significant_features$Term, which = "row", panel_fun = panel_fun,
+                                                          size = unit(10, "cm"), gap = unit(0.1, "cm"), width = unit(20, "cm")))
+  } else{ora_anno=NULL}
+
+
+  subset_top_anno<-top_anno[match(subset_sample_info[[sample_id_column]],assay_samples),]
+  pdf(file = file.path(output_dir,"signature_heatmap.pdf"),width = width,height=height)
+  signature_heatmap<-ComplexHeatmap::draw(ComplexHeatmap::Heatmap(t(scale(t(subset_assay))),name="zscore",top_annotation = subset_top_anno,right_annotation = ora_anno,cluster_rows = F,cluster_columns = F,show_column_names = F,show_row_names = F,column_split = subset_sample_info$DX4,column_title_gp = gpar(fontsize=8),column_title_rot = 60,row_split = significant_features$Term,row_title_gp = gpar(fontsize=0),...))
+  for(i in 1:length(group_terms)){
+    decorate_heatmap_body("zscore",{
+      grid.rect(x = unit(0.5, "npc"),  # x-coordinate for column B
+                y = unit(0.5, "npc"),   # y-coordinate for row e
+                width = unit(1, "npc"),  # Width of the column split
+                height = unit(1, "npc"),
+                gp = gpar(fill = NA, col=setdiff(c("blue","red","green"),palette), lwd = 2)) # Height of the row split
+    },row_slice = i,column_slice = i)
+  }
+  dev.off()
+  output<-list()
+  output[["significant_features"]]<-significant_features
+  output[["signature_heatmap"]]<-file.path(output_dir,"signature_heatmap.svg")
+  output[["ora_statistics"]]<-ora_statistics
+  output[["ora_dotplots"]]<-ora_dotplots
+  return(output)
+}
+
+#' runAssaySignatureAnalysis
+#'
+#' run delta analysis about various assay
+#'
+#' @param obj Analysis. analysis object to be run.
+#' @param assay_name character. assay name.
+#' @param assay_type character. assay type, such as "DNA" or "RNA"
+#' @param scale logic. whether to scale assay.
+#' @param patient_id_column character. column for patient id.
+#' @param sample_id_column character. column for sample id.
+#' @param top_anno HeatmapAnnotation. top annotation, passed to heatmap.
+#' @param top_anno_sample_order character. patient orders for top annotation.
+#' @param palette character. colors for KM curve.
+#' @param test_method character. test method, such as "ttest" or "limma".
+#' @param pval_cutoff numeric. p value cutoff for significance.
+#' @param logFC_cutoff numeric. log fold change cutoff for signigicant genes.
+#' @param padj_cutoff numeric. adjusted p value cutoff for significance.
+#' @param save_analysis logic. whether to save results locally.
+#' @param ora logic. whether to run ora analysis.
+#' @param ont character. ontology of GO, default "BP".
+#' @param enrichGO_params list. parameters passed to enrichGO.
+#' @param ora_padj_cutoff numeric.  padj cutoff for enrichGO result.
+#' @param width numeric. heatmap width.
+#' @param height numeric. heatmap height.
+#' @param output_dir character. output directory, if is.null, use project/analysis_name as directory
+#' @param log character. any comments.
+#' @param ... list. parameter passed to SignatureAnalysis.
+#'
+#' @return Analysis.
+#' @export
+#'
+setGeneric("runAssaySignatureAnalysis",function(obj,assay_name,assay_type="RNAseq",scale,
+                                                patient_id_column="Patient_ID",sample_id_column="Sample_ID",group_column,term_cutoff=3,
+                                                top_anno,top_anno_sample_order,
+                                                test_method=c("ttest","limma"),above_average_pct_cutoff=NULL,below_average_pct_cutoff=NULL,pval_cutoff = 0.05,logFold_cutoff=NULL,padj_cutoff=NULL,sign_filter=c("Both","Pos","Neg"),
+                                                palette=NULL,
+                                                ora=FALSE,ont="BP",enrichGO_params=NULL,ora_padj_cutoff=0.05,
+                                                width=40,height=40,
+                                                save_analysis = T,output_dir,
+                                                log="run assay signature analysis.",...) standardGeneric("runAssaySignatureAnalysis"))
+setMethod("runAssaySignatureAnalysis","Analysis",function(obj,assay_name,assay_type="RNAseq",scale,
+                                                          patient_id_column="Patient_ID",sample_id_column="Sample_ID",group_column,term_cutoff=3,
+                                                          top_anno,top_anno_sample_order,
+                                                          test_method=c("ttest","limma"),above_average_pct_cutoff=NULL,below_average_pct_cutoff=NULL,pval_cutoff = 0.05,logFold_cutoff=NULL,padj_cutoff=NULL,sign_filter=c("Both","Pos","Neg"),
+                                                          palette=NULL,
+                                                          ora=FALSE,ont="BP",enrichGO_params=NULL,ora_padj_cutoff=0.05,
+                                                          width=40,height=40,
+                                                          save_analysis = T,output_dir,
+                                                          log="run assay signature analysis.",...){
+  sign_filter<-match.arg(sign_filter)
+  if(save_analysis){
+    if(missing(output_dir)){
+      output_dir<-file.path(obj@project,obj@analysis_name)
+      if(!dir.exists(output_dir)){dir.create(output_dir,recursive = T)}
+    }
+  } else {
+    output_dir<-getwd()
+  }
+  if(missing(scale)){scale=F}
+  assay_samples<-intersect(top_anno_sample_order,colnames(methods::slot(obj@experiment,assay_name)@assay_data))
+  top_anno<-top_anno[match(assay_samples,top_anno_sample_order)]
+  top_anno_sample_order<-assay_samples
+  sample_info<-obj@experiment@sample_info
+  sample_info<-sample_info[sample_info$Assay==assay_type,]
+  sample_info<-merge(sample_info,obj@experiment@patient_info,by=patient_id_column,all.x=T)
+  sample_info<-sample_info[match(assay_samples,sample_info[[sample_id_column]]),]
+
+  assay_data=methods::slot(obj@experiment,assay_name)@assay_data[,assay_samples]
+  if(missing(palette)){palette=c("blue","white","red")}
+
+  signature_analysis<-signatureAnalysis(assay=assay_data,scale=scale,assay_name=assay_name,
+                            sample_info=sample_info,patient_id_column=patient_id_column,sample_id_column=sample_id_column,group_column=group_column,term_cutoff = term_cutoff,
+                            top_anno=top_anno,top_anno_sample_order=assay_samples,
+                            test_method=test_method,above_average_pct_cutoff=above_average_pct_cutoff,below_average_pct_cutoff=below_average_pct_cutoff,pval_cutoff = pval_cutoff,logFold_cutoff=logFold_cutoff,padj_cutoff=padj_cutoff,sign_filter=sign_filter,
+                            palette=palette,ora=ora,ont=ont,enrichGO_params=enrichGO_params,ora_padj_cutoff=ora_padj_cutoff,
+                            width=width,height=height,
+                            output_dir=output_dir,...)
+
+  obj@log=paste(obj@log,"\n\n",Sys.time(),";\n\t",log,sep="")
+  obj@output<-signature_analysis
+
+  return(obj)
+}
+)
+
+

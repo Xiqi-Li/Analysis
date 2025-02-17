@@ -7,7 +7,7 @@
 runAssayunSupervisedAnalysis(
   obj,
   assay_name,
-  assay_type = "RNA",
+  assay_type = "RNASeq",
   scale = F,
   stablecluster_method = "combine",
   cutFUN = c(ClassDiscovery::cutHclust),
@@ -19,7 +19,7 @@ runAssayunSupervisedAnalysis(
   sample_id_column = "Sample_ID",
   survival_column = NULL,
   status_column = NULL,
-  survival_type = c("OS", "PFS"),
+  survival_type = c("OS", "PFS", "P2DS"),
   top_anno,
   top_anno_sample_order,
   palette = NULL,
@@ -103,7 +103,7 @@ runAssayunSupervisedAnalysis(
 
 \item{output_dir}{character. output directory.}
 
-\item{log}{chracter. any comments.}
+\item{log}{character. any comments.}
 
 \item{...}{list. parameter passed tp difAnalysis}
 }

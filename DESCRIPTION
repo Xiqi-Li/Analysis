@@ -16,6 +16,8 @@ Imports:
     ClassDiscovery,
     clonevol,
     ComplexHeatmap,
+    cosmicsig,
+    deconstructSigs,
     dplyr,
     GenomeInfoDb,
     grid,
