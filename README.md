@@ -1,92 +1,166 @@
-# Analysis
+# analysis
 
-operations of a Analysis
+S4 container class `Analysis` and all downstream analysis methods for bulk multi-omic cancer cohort analysis. This is the top-level package in the HaifengPackages system.
 
-## Getting started
-
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+## Role in the Pipeline
 
 ```
-cd existing_repo
-git remote add origin http://gitlab.mdanderson.edu/HZhu2/analysis.git
-git branch -M main
-git push -uf origin main
+utiltools
+    └── assay
+         └── bulkexperiment
+              └── analysis  <-- YOU ARE HERE
 ```
 
-## Integrate with your tools
+`analysis` wraps a fully-processed `BulkExperiment` in an `Analysis` S4 object and provides all `run*Analysis()` methods for downstream statistical analysis and visualization: survival, differential analysis, consensus clustering, mutational signatures, CNV, fusion, clonal evolution, prognostic signature building, and more.
 
-- [ ] [Set up project integrations](http://gitlab.mdanderson.edu/HZhu2/analysis/-/settings/integrations)
+## The Analysis Class
 
-## Collaborate with your team
+```
+Analysis
+├── project / analysis_name   — output path components
+├── experiment                — BulkExperiment (the processed cohort)
+└── output                    — named list of results (matrices, data.frames, plot objects)
+```
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Automatically merge when pipeline succeeds](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+All `run*Analysis()` methods:
+1. Store results in `obj@output[["result_name"]]` as R objects (data.frames, matrices, heatmap objects)
+2. Write CSV + SVG files to `{project}/{analysis_name}/` when `save_analysis = TRUE`
 
-## Test and Deploy
+Three internal helper functions back multiple public methods: `deltaAnalysis()` (longitudinal delta), `difAnalysis()` (differential), `signatureAnalysis()` (group signatures).
 
-Use the built-in continuous integration in GitLab.
+## Analysis Methods
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+### Survival and Endpoint Analyses
 
-***
+| Method | Description | Key params |
+|---|---|---|
+| `runSurvivalAnalysis()` | Univariate + multivariate Cox, KM plots | `survival_column`, `status_column`, `covariate_columns`, `extra_covariates` |
+| `runCINTMBSurvivalAnalysis()` | KM survival by CIN-High/Low and TMB-High/Low | CIN/TMB column names, cutoffs (median used if omitted) |
+| `runAssaySurvivalSignatureAnalysis()` | LASSO-Cox prognostic signature, risk score, time-ROC AUC | `assay_name`, `survival_column`, `uni_cox_pvalue_cutoff`, `beta_filter` |
 
-# Editing this README
+### Variant and Genomic Analyses
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!).  Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
+| Method | Description | Key params |
+|---|---|---|
+| `runVariantStatisticsAnalysis()` | Per-sample CIN, TMB, COSMIC-TMB, AMP/DEL gene counts | `cosmic_tier12_cancer_genes`, `genetic_cancer_genes`, `oncokb_cancer_genes` |
+| `runCNVAnalysis()` | GISTIC2 lesion heatmap, stable CNV clusters, KM; genome-wide and arm CN plots | `top_anno`, `clusters`, `survival_column` |
+| `runCNVDifAnalysis()` | Differential CNV by group at cytoband/arm/gene level | `group_column`, `level`, `contrasts` |
+| `runMutationalSignatureAnalysis()` | NMF signature extraction, COSMIC v3 matching, per-sample contributions | `profile_group`, `rank` (review rank plot first) |
+| `runMutationalMafAnalysis()` | maftools oncoplot with cancer hallmarks, lollipop plots, somatic interactions | `cancer_genes`, `selected_genes`, `pathways` |
+| `runMDLAnalysis()` | MDL panel + WES harmonized oncoplot (timepoint-aware) | `mdl_info`, `mutation_panel_info`, `oncokb_cancer_genes_info` |
+| `runFusionAnalysis()` | Multi-panel fusion heatmap (type, caller, gene function) | `top_anno`, `top_fusions` |
 
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+### Transcriptomic Analyses
 
-## Name
-Choose a self-explaining name for your project.
+| Method | Description | Key params |
+|---|---|---|
+| `runAssayDifAnalysis()` | Differential analysis for any assay (DGE, immune dif, activity dif, etc.) | `assay_name`, `group_column`, `test_method`, `block_column` (paired), `contrasts` |
+| `runAssayDeltaAnalysis()` | Longitudinal delta (TP2 minus Baseline) for any assay + group comparison on delta | `assay_name`, `timepoint_column`, `timepoint_terms`, `group_column` |
+| `runAssayunSupervisedAnalysis()` | Stable consensus clustering (13 algorithms) for any assay | `assay_name`, `scale`, `clusters`, `method` |
+| `runAssaySignatureAnalysis()` | Per-group gene/feature signatures with optional GO enrichment | `assay_name`, `group_column`, `sign_filter`, `ora` |
+| `runICGDifAnalysis()` | Immune checkpoint gene inhibitory/stimulatory scoring + differential + survival | `icg_info`, `survival_column`, `group_column` |
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+### Clonal Evolution Analyses
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+| Method | Description | Notes |
+|---|---|---|
+| `runCloneAnalysis()` | Load PyClone-VI CCF results into `clone_assay` | Requires prior PyClone-VI run (external Python) |
+| `runCCFDifAnalysis()` | Differential CCF between groups | Uses `clone_assay` |
+| `runCloneunSupervisedAnalysis()` | Unsupervised clustering of clone fractions + KM | Uses `clone_assay` |
+| `runpyNBSAnalysis()` | pyNBS cluster survival visualization | Requires prior pyNBS run (external Python) |
 
 ## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+```r
+# Install all dependencies in order
+devtools::install("utiltools")
+devtools::install("assay")
+devtools::install("bulkexperiment")
+devtools::install("analysis")
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+# For interactive development:
+devtools::load_all("analysis")
+```
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+## Basic Usage
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+```r
+library(Analysis)
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+# Wrap a processed BulkExperiment in an Analysis object
+obj <- new("Analysis",
+    project       = "MyProject",
+    analysis_name = "cohort_analysis_v1",
+    experiment    = exp_sub              # a processed, subsetted BulkExperiment
+)
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+# Survival analysis
+obj <- runSurvivalAnalysis(obj,
+    survival_column   = "OS_days",
+    status_column     = "VitalStatus",
+    covariate_columns = c("Age", "Sex", "TreatmentArm"),
+    save_analysis     = TRUE
+)
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+# Differential mRNA by treatment arm
+obj <- runAssayDifAnalysis(obj,
+    assay_name    = "mRNA_assay",
+    group_column  = "TreatmentArm",
+    test_method   = "limma",
+    contrasts     = list(c("ArmA", "ArmB")),
+    save_analysis = TRUE
+)
 
-## License
-For open source projects, say how it is licensed.
+# Consensus clustering of immune cell fractions
+obj <- runAssayunSupervisedAnalysis(obj,
+    assay_name    = "icf_assay",
+    clusters      = 3,
+    method        = "combined",
+    save_analysis = TRUE
+)
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+# Longitudinal delta analysis (paired baseline/TP2)
+obj <- runAssayDeltaAnalysis(obj,
+    assay_name       = "mRNA_assay",
+    timepoint_column = "Timepoint",
+    timepoint_terms  = list(baseline = "Baseline", tp2 = "TP2"),
+    group_column     = "TreatmentArm",
+    save_analysis    = TRUE
+)
+
+# Mutational signatures (NMF + COSMIC v3)
+# First run without specifying rank to review the rank plot
+obj <- runMutationalSignatureAnalysis(obj, rank = NULL)
+# REVIEW: NMF rank estimation plot (cophenetic, RSS)
+obj <- runMutationalSignatureAnalysis(obj, rank = 3, save_analysis = TRUE)
+
+# LASSO-Cox prognostic signature from mRNA
+obj <- runAssaySurvivalSignatureAnalysis(obj,
+    assay_name          = "mRNA_assay",
+    survival_column     = "OS_days",
+    status_column       = "VitalStatus",
+    uni_cox_pvalue_cutoff = 0.01,
+    save_analysis       = TRUE
+)
+
+# Access results
+obj@output[["survival"]]
+obj@output[["mRNA_assay_differential"]]
+```
+
+## Adding a New Analysis Method
+
+1. Add `setGeneric` + `setMethod` to `analysis/R/Analysis.R` following the existing pattern.
+2. Put heavy computation in a standalone helper function (not an S4 method) — see `deltaAnalysis()`, `difAnalysis()`, `signatureAnalysis()` as examples.
+3. Store results in `obj@output[["result_name"]]` and write to disk when `save_analysis = TRUE`.
+4. Run `devtools::document("analysis")` to regenerate NAMESPACE.
+
+## Dependencies
+
+Internal: `bulkexperiment`, `assay`, `utiltools`
+
+External: `ComplexHeatmap`, `survivalAnalysis`, `glmnet`, `maftools`, `MutationalPatterns`, `NMF`, `cosmicsig`, `ClassDiscovery`, `BSgenome.Hsapiens.UCSC.hg19`, `GenomeInfoDb`, `clonevol`, `deconstructSigs`, `dplyr`, `tidyr`, `purrr`, `RColorBrewer`, `grid`, `assertthat`
+
+## Author
+
+Haifeng Zhu, MD Anderson Cancer Center (`zhuhf77@mdanderson.org`)
