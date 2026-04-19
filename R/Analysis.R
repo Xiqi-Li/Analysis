@@ -3801,4 +3801,322 @@ setMethod("runAssaySignatureAnalysis","Analysis",function(obj,assay_name,assay_t
 }
 )
 
+# ── TIDE Analysis ─────────────────────────────────────────────────────────────
 
+#' Run TIDE immune dysfunction/exclusion analysis
+#'
+#' Loads a pre-computed TIDE score file (from tidepy) and runs correlative
+#' endpoint statistics (Wilcoxon, logistic regression, probability curves) for
+#' all numeric TIDE metrics vs a binary clinical endpoint.
+#' Supports baseline, on-treatment, or paired longitudinal (baseline + delta) analysis.
+#'
+#' @param obj Analysis instance
+#' @param tide_file character; path to TIDE output TSV (from run_tidepy() or tidepy CLI)
+#' @param sample_id_col character; column linking TIDE rows to sample_info (default: "Sample_ID")
+#' @param group_column character; binary endpoint column in sample_info
+#' @param covariates character vector; covariate columns in patient_info for adjusted logistic models
+#' @param timepoint character; "baseline", "on_treatment", or "paired" (computes delta TP2-Baseline)
+#' @param timepoint_column character; Timepoint column in sample_info (default: "Timepoint")
+#' @param baseline_label character; baseline timepoint value (default: "Baseline")
+#' @param tp2_label character; TP2 timepoint value (default: "TP2")
+#' @param exclude_metrics character vector; TIDE metric columns to exclude (default: "MSI Score")
+#' @param save_analysis logical; write result CSVs to output_dir
+#' @param output_dir character; output directory (defaults to {project}/{analysis_name})
+#' @param log character; description appended to analysis log
+#' @return Analysis instance with results in obj@output[["tide"]]
+#' @export
+setGeneric("runTIDEAnalysis",
+  function(obj,
+           tide_file,
+           sample_id_col    = "Sample_ID",
+           group_column,
+           covariates       = NULL,
+           timepoint        = c("baseline", "on_treatment", "paired"),
+           timepoint_column = "Timepoint",
+           baseline_label   = "Baseline",
+           tp2_label        = "TP2",
+           exclude_metrics  = "MSI Score",
+           save_analysis    = FALSE, output_dir,
+           log = "run TIDE immune dysfunction/exclusion analysis.")
+  standardGeneric("runTIDEAnalysis"))
+
+setMethod("runTIDEAnalysis", "Analysis", function(
+    obj, tide_file, sample_id_col = "Sample_ID", group_column,
+    covariates = NULL,
+    timepoint  = c("baseline", "on_treatment", "paired"),
+    timepoint_column = "Timepoint", baseline_label = "Baseline", tp2_label = "TP2",
+    exclude_metrics = "MSI Score",
+    save_analysis = FALSE, output_dir,
+    log = "run TIDE immune dysfunction/exclusion analysis.") {
+
+  timepoint <- match.arg(timepoint)
+  if (save_analysis && missing(output_dir)) {
+    output_dir <- file.path(obj@project, obj@analysis_name)
+    if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+  }
+
+  tide_df <- utiltools::load_tide_output(tide_file, sample_id_col = sample_id_col)
+  si      <- obj@experiment@sample_info
+  pi      <- obj@experiment@patient_info
+  numeric_cols <- names(tide_df)[sapply(tide_df, is.numeric)]
+  numeric_cols <- setdiff(numeric_cols, exclude_metrics)
+  feat_df <- tide_df[, c(sample_id_col, numeric_cols), drop = FALSE]
+
+  .filter_si <- function(label) si[si[[timepoint_column]] == label, ]
+  .merge_meta <- function(si_sub) {
+    cov_cols <- if (!is.null(covariates)) covariates else character(0)
+    pi_cols  <- intersect(c("Patient_ID", cov_cols), names(pi))
+    merge(si_sub[, c(sample_id_col, group_column), drop = FALSE],
+          pi[, pi_cols, drop = FALSE],
+          by = "Patient_ID", all.x = TRUE)
+  }
+
+  run_stats <- function(fmat, meta) {
+    utiltools::run_endpoint_correlative_stats(
+      feature_matrix   = fmat,
+      meta_df          = meta,
+      sample_id_col    = sample_id_col,
+      endpoint_spec    = list(type = "binary", col = group_column),
+      covariates       = covariates,
+      exclude_features = NULL)
+  }
+
+  if (timepoint == "paired") {
+    base_si <- .filter_si(baseline_label)
+    tp2_si  <- .filter_si(tp2_label)
+    shared_pts <- intersect(base_si$Patient_ID, tp2_si$Patient_ID)
+    base_si <- base_si[base_si$Patient_ID %in% shared_pts, ]
+    tp2_si  <- tp2_si[tp2_si$Patient_ID  %in% shared_pts, ]
+
+    base_feat <- merge(feat_df, base_si[, sample_id_col, drop = FALSE], by = sample_id_col)
+    tp2_feat  <- merge(feat_df, tp2_si[, sample_id_col, drop = FALSE], by = sample_id_col)
+    base_feat$Patient_ID <- base_si$Patient_ID[match(base_feat[[sample_id_col]], base_si[[sample_id_col]])]
+    tp2_feat$Patient_ID  <- tp2_si$Patient_ID[match(tp2_feat[[sample_id_col]], tp2_si[[sample_id_col]])]
+
+    delta_feat <- base_feat[, c(sample_id_col, "Patient_ID"), drop = FALSE]
+    for (col in numeric_cols) {
+      b <- setNames(base_feat[[col]], base_feat$Patient_ID)
+      t <- setNames(tp2_feat[[col]],  tp2_feat$Patient_ID)
+      delta_feat[[col]] <- t[delta_feat$Patient_ID] - b[delta_feat$Patient_ID]
+    }
+
+    base_meta  <- .merge_meta(base_si)
+    base_stats <- run_stats(base_feat[, c(sample_id_col, numeric_cols)], base_meta)
+    delta_meta <- base_meta
+    delta_meta[[sample_id_col]] <- delta_feat[[sample_id_col]][match(delta_meta[[sample_id_col]],
+                                                                      base_feat[[sample_id_col]])]
+    delta_stats <- run_stats(delta_feat[, c(sample_id_col, numeric_cols)], delta_meta)
+
+    obj@output[["tide"]] <- list(baseline = base_stats, delta = delta_stats)
+
+    if (save_analysis) {
+      out <- file.path(output_dir, "tide")
+      dir.create(file.path(out, "delta"), recursive = TRUE, showWarnings = FALSE)
+      if (!is.null(base_stats$wilcox))
+        utils::write.csv(base_stats$wilcox,  file.path(out, "baseline_wilcox.csv"),  row.names = FALSE, quote = FALSE)
+      if (!is.null(base_stats$logit))
+        utils::write.csv(base_stats$logit,   file.path(out, "baseline_logit.csv"),   row.names = FALSE, quote = FALSE)
+      if (!is.null(base_stats$logit_adj))
+        utils::write.csv(base_stats$logit_adj, file.path(out, "baseline_logit_adj.csv"), row.names = FALSE, quote = FALSE)
+      if (!is.null(delta_stats$wilcox))
+        utils::write.csv(delta_stats$wilcox, file.path(out, "delta", "delta_wilcox.csv"), row.names = FALSE, quote = FALSE)
+      if (!is.null(delta_stats$logit))
+        utils::write.csv(delta_stats$logit,  file.path(out, "delta", "delta_logit.csv"),  row.names = FALSE, quote = FALSE)
+    }
+
+  } else {
+    tp_label <- if (timepoint == "baseline") baseline_label else tp2_label
+    si_tp    <- .filter_si(tp_label)
+    meta     <- .merge_meta(si_tp)
+    feat_tp  <- merge(feat_df, si_tp[, sample_id_col, drop = FALSE], by = sample_id_col)
+    stats    <- run_stats(feat_tp, meta)
+    obj@output[["tide"]] <- stats
+
+    if (save_analysis) {
+      out <- file.path(output_dir, "tide")
+      dir.create(out, recursive = TRUE, showWarnings = FALSE)
+      if (!is.null(stats$wilcox))
+        utils::write.csv(stats$wilcox, file.path(out, paste0(timepoint, "_wilcox.csv")), row.names = FALSE, quote = FALSE)
+      if (!is.null(stats$logit))
+        utils::write.csv(stats$logit,  file.path(out, paste0(timepoint, "_logit.csv")),  row.names = FALSE, quote = FALSE)
+      if (!is.null(stats$logit_adj))
+        utils::write.csv(stats$logit_adj, file.path(out, paste0(timepoint, "_logit_adj.csv")), row.names = FALSE, quote = FALSE)
+    }
+  }
+
+  obj@log <- paste(obj@log, "\n\n", Sys.time(), ";\n\t", log, sep = "")
+  if (save_analysis) cat(obj@log, file = file.path(output_dir, "log.txt"))
+  return(obj)
+})
+
+# ── EcoTyper Analysis ─────────────────────────────────────────────────────────
+
+#' Run EcoTyper ecotype/cell-state endpoint analysis
+#'
+#' Applies correlative endpoint statistics (Wilcoxon, logistic, Cox, Spearman) to
+#' EcoTyper ecotype and cell-state abundances stored in ecotyper_assay. Supports
+#' baseline and/or longitudinal delta (TP2 minus Baseline) time windows, and
+#' optional per-cohort stratification.
+#'
+#' @param obj Analysis instance
+#' @param group_column character; clinical endpoint column in sample_info
+#' @param endpoint_spec named list; type ("binary"|"continuous"|"survival"), col, and optional
+#'   group_levels (binary), time_col + status_col (survival)
+#' @param covariates character vector; covariate columns in patient_info
+#' @param time_windows character vector; which windows to analyze: "baseline", "delta", or both
+#' @param timepoint_column character; Timepoint column in sample_info (default: "Timepoint")
+#' @param baseline_label character; baseline timepoint value (default: "Baseline")
+#' @param tp2_label character; TP2 timepoint value (default: "TP2")
+#' @param strata_col character or NULL; column for cohort stratification (runs analysis per stratum)
+#' @param n_min integer; minimum samples required per group (default: 5)
+#' @param save_analysis logical; write result CSVs to output_dir
+#' @param output_dir character; output directory (defaults to {project}/{analysis_name})
+#' @param log character; description appended to analysis log
+#' @return Analysis instance with results in obj@output[["ecotyper"]]
+#' @export
+setGeneric("runEcotyperAnalysis",
+  function(obj,
+           group_column,
+           endpoint_spec,
+           covariates       = NULL,
+           time_windows     = c("baseline", "delta"),
+           timepoint_column = "Timepoint",
+           baseline_label   = "Baseline",
+           tp2_label        = "TP2",
+           strata_col       = NULL,
+           n_min            = 5,
+           save_analysis    = FALSE, output_dir,
+           log = "run EcoTyper ecotype/cell-state endpoint analysis.")
+  standardGeneric("runEcotyperAnalysis"))
+
+setMethod("runEcotyperAnalysis", "Analysis", function(
+    obj, group_column, endpoint_spec, covariates = NULL,
+    time_windows = c("baseline", "delta"),
+    timepoint_column = "Timepoint", baseline_label = "Baseline", tp2_label = "TP2",
+    strata_col = NULL, n_min = 5,
+    save_analysis = FALSE, output_dir,
+    log = "run EcoTyper ecotype/cell-state endpoint analysis.") {
+
+  eco_assay <- obj@experiment@ecotyper_assay
+  if (utiltools::is.empty.data.frame(eco_assay@assay_data))
+    stop("ecotyper_assay is empty. Run updateEcotyperAssay() on the BulkExperiment first.")
+
+  if (save_analysis && missing(output_dir)) {
+    output_dir <- file.path(obj@project, obj@analysis_name)
+    if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+  }
+
+  si   <- obj@experiment@sample_info
+  pi   <- obj@experiment@patient_info
+
+  # ecotyper_assay is wide (features as rows, samples as columns) — transpose to samples×features
+  eco_mat <- as.data.frame(t(eco_assay@assay_data))
+  eco_mat[["Sample_ID"]] <- rownames(eco_mat)
+  feature_ids <- setdiff(names(eco_mat), "Sample_ID")
+
+  # Prepare delta if requested
+  delta_mat <- NULL
+  if ("delta" %in% time_windows && timepoint_column %in% names(si)) {
+    base_si <- si[si[[timepoint_column]] == baseline_label, ]
+    tp2_si  <- si[si[[timepoint_column]] == tp2_label, ]
+    shared  <- intersect(base_si$Patient_ID, tp2_si$Patient_ID)
+    if (length(shared) > 0) {
+      b <- merge(eco_mat, base_si[base_si$Patient_ID %in% shared, c("Sample_ID", "Patient_ID")], by = "Sample_ID")
+      t <- merge(eco_mat, tp2_si[tp2_si$Patient_ID   %in% shared, c("Sample_ID", "Patient_ID")], by = "Sample_ID")
+      b <- b[order(b$Patient_ID), ]; t <- t[order(t$Patient_ID), ]
+      delta_mat <- b[, c("Sample_ID", "Patient_ID"), drop = FALSE]
+      for (feat in feature_ids) delta_mat[[feat]] <- t[[feat]] - b[[feat]]
+    }
+  }
+
+  # Split feature columns by biological level for separate FDR pools
+  eco_feats   <- grep("^ECO_",   feature_ids, value = TRUE)
+  cs_feats    <- grep("^CS_",    feature_ids, value = TRUE)
+  ecocs_feats <- grep("^ECOCS_", feature_ids, value = TRUE)
+
+  # Add within-cell-type FDR column to cell-state result tables
+  .add_fdr_by_celltype <- function(tbl) {
+    if (is.null(tbl) || nrow(tbl) == 0) return(tbl)
+    tbl$CellType <- sub("^CS_(.+)_S[0-9]+$", "\\1", tbl$Feature)
+    tbl <- dplyr::group_by(tbl, CellType) %>%
+      dplyr::mutate(FDR_by_CellType = stats::p.adjust(P_value, method = "BH")) %>%
+      dplyr::ungroup()
+    as.data.frame(tbl)
+  }
+
+  run_level <- function(fmat, meta_sub) {
+    run_one_feats <- function(feats) {
+      if (length(feats) == 0) return(NULL)
+      utiltools::run_endpoint_correlative_stats(
+        feature_matrix = fmat[, c("Sample_ID", feats), drop = FALSE],
+        meta_df        = meta_sub,
+        sample_id_col  = "Sample_ID",
+        endpoint_spec  = endpoint_spec,
+        covariates     = covariates,
+        n_min          = n_min)
+    }
+    cs_res <- run_one_feats(cs_feats)
+    if (!is.null(cs_res))
+      for (tbl_name in c("wilcox","logit","logit_adj","cox","cox_adj","cor"))
+        cs_res[[tbl_name]] <- .add_fdr_by_celltype(cs_res[[tbl_name]])
+    list(
+      ecotype      = run_one_feats(eco_feats),
+      cell_state   = cs_res,
+      ce_cellstate = run_one_feats(ecocs_feats)
+    )
+  }
+
+  results <- list()
+  for (tw in time_windows) {
+    if (tw == "baseline") {
+      base_si  <- si[si[[timepoint_column]] == baseline_label, ]
+      fmat     <- merge(eco_mat, base_si[, "Sample_ID", drop = FALSE], by = "Sample_ID")
+      cov_cols <- if (!is.null(covariates)) covariates else character(0)
+      pi_cols  <- intersect(c("Patient_ID", cov_cols), names(pi))
+      meta_sub <- merge(base_si[, c("Sample_ID", "Patient_ID", group_column), drop = FALSE],
+                        pi[, pi_cols, drop = FALSE],
+                        by = "Patient_ID", all.x = TRUE)
+      if (!is.null(strata_col) && strata_col %in% names(meta_sub)) {
+        for (sv in unique(meta_sub[[strata_col]][!is.na(meta_sub[[strata_col]])])) {
+          idx <- meta_sub[[strata_col]] == sv
+          results[[paste0("baseline_", sv)]] <- run_level(
+            fmat[fmat$Sample_ID %in% meta_sub$Sample_ID[idx], ],
+            meta_sub[idx, ])
+        }
+      } else {
+        results[["baseline"]] <- run_level(fmat, meta_sub)
+      }
+    } else if (tw == "delta" && !is.null(delta_mat)) {
+      base_si  <- si[si[[timepoint_column]] == baseline_label, ]
+      cov_cols <- if (!is.null(covariates)) covariates else character(0)
+      pi_cols  <- intersect(c("Patient_ID", cov_cols), names(pi))
+      meta_sub <- merge(base_si[, c("Sample_ID", "Patient_ID", group_column), drop = FALSE],
+                        pi[, pi_cols, drop = FALSE],
+                        by = "Patient_ID", all.x = TRUE)
+      results[["delta"]] <- run_level(delta_mat[, c("Sample_ID", feature_ids)], meta_sub)
+    }
+  }
+
+  obj@output[["ecotyper"]] <- results
+
+  if (save_analysis) {
+    for (rname in names(results)) {
+      for (level in c("ecotype", "cell_state", "ce_cellstate")) {
+        rdir <- file.path(output_dir, "ecotyper", rname, level)
+        dir.create(rdir, recursive = TRUE, showWarnings = FALSE)
+        res <- results[[rname]][[level]]
+        if (is.null(res)) next
+        for (tbl_name in c("wilcox","logit","logit_adj","cor","cox","cox_adj")) {
+          tbl <- res[[tbl_name]]
+          if (!is.null(tbl) && nrow(tbl) > 0)
+            utils::write.csv(tbl, file.path(rdir, paste0(tbl_name, ".csv")),
+                             row.names = FALSE, quote = FALSE)
+        }
+      }
+    }
+    cat(obj@log, file = file.path(output_dir, "log.txt"))
+  }
+
+  obj@log <- paste(obj@log, "\n\n", Sys.time(), ";\n\t", log, sep = "")
+  return(obj)
+})
