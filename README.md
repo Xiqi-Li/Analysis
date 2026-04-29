@@ -37,6 +37,7 @@ Three internal helper functions back multiple public methods: `deltaAnalysis()` 
 | `runSurvivalAnalysis()` | Univariate + multivariate Cox, KM plots | `survival_column`, `status_column`, `covariate_columns`, `extra_covariates` |
 | `runCINTMBSurvivalAnalysis()` | KM survival by CIN-High/Low and TMB-High/Low | CIN/TMB column names, cutoffs (median used if omitted) |
 | `runAssaySurvivalSignatureAnalysis()` | LASSO-Cox prognostic signature, risk score, time-ROC AUC | `assay_name`, `survival_column`, `uni_cox_pvalue_cutoff`, `beta_filter` |
+| `runSwimmerPlotAnalysis()` | Per-patient swimmer plot from patient_info clinical columns; OS bar required, all other layers (treatment overlay, response marker, progression shape, vital status end-cap, CB/NCB square, cohort brackets) optional | `os_weeks_col` (required); `pfs_weeks_col`, `treatment_weeks_col`, `vital_status_col`, `best_response_col`, `progressed_col`, `clinical_benefit_col`, `cohort_col` (all optional) |
 
 ### Variant and Genomic Analyses
 
@@ -59,6 +60,19 @@ Three internal helper functions back multiple public methods: `deltaAnalysis()` 
 | `runAssayunSupervisedAnalysis()` | Stable consensus clustering (13 algorithms) for any assay | `assay_name`, `scale`, `clusters`, `method` |
 | `runAssaySignatureAnalysis()` | Per-group gene/feature signatures with optional GO enrichment | `assay_name`, `group_column`, `sign_filter`, `ora` |
 | `runICGDifAnalysis()` | Immune checkpoint gene inhibitory/stimulatory scoring + differential + survival | `icg_info`, `survival_column`, `group_column` |
+
+### External Tool Analyses (TIDE, EcoTyper)
+
+| Method | Description | Key params |
+|---|---|---|
+| `runTIDEAnalysis()` | TIDE dysfunction/exclusion scores vs binary endpoint; Wilcoxon + logistic (unadj/adj) + probability curves; supports baseline, on-treatment, or paired delta | `tide_file`, `group_column`, `covariates`, `timepoint` |
+| `runEcotyperAnalysis()` | Ecotype/cell-state abundances vs binary, continuous, or survival endpoints; baseline + longitudinal delta; optional cohort stratification | `group_column`, `endpoint_spec`, `covariates`, `time_windows`, `strata_col` |
+
+### Sample Availability Summary
+
+| Method | Description | Key params |
+|---|---|---|
+| `runSampleAvailabilityAnalysis()` | Summarize sample/patient counts per assay, with Timepoint and category breakdowns; also produces a per-patient assay availability table | `category_col` (default `"tumor_category"`; `NULL` to skip) |
 
 ### Clonal Evolution Analyses
 

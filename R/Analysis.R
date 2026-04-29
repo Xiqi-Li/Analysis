@@ -4120,3 +4120,216 @@ setMethod("runEcotyperAnalysis", "Analysis", function(
   obj@log <- paste(obj@log, "\n\n", Sys.time(), ";\n\t", log, sep = "")
   return(obj)
 })
+
+#' runSampleAvailabilityAnalysis
+#' Summarize sample availability across assays in the experiment.
+#'
+#' @param obj Analysis. analysis object.
+#' @param category_col character. column in contingen_table used for category breakdown (e.g. "tumor_category"). NULL to skip.
+#' @param save_analysis logic. whether to save results locally.
+#' @param output_dir character. output directory; if missing, uses project/analysis_name.
+#' @param log character. any comments.
+#'
+#' @return Analysis. output$sample_availability is a list with $summary (per-assay counts) and $per_patient (per-patient availability).
+#' @export
+#'
+setGeneric("runSampleAvailabilityAnalysis",function(obj,category_col="tumor_category",save_analysis=F,output_dir,log="run sample availability analysis.") standardGeneric("runSampleAvailabilityAnalysis"))
+setMethod("runSampleAvailabilityAnalysis","Analysis",function(obj,category_col="tumor_category",save_analysis=F,output_dir,log="run sample availability analysis."){
+  stopifnot("contingen_table must be populated; run updateContingeMetaActivessaytable() first"=!utiltools::is.empty.data.frame(obj@experiment@contingen_table))
+  ct <- obj@experiment@contingen_table
+  assay_cols <- names(ct)[sapply(ct, is.logical)]
+  timepoints <- sort(unique(ct$Timepoint))
+  if(!is.null(category_col) && category_col %in% names(ct)){
+    cat_vals <- sort(unique(ct[[category_col]]))
+  } else {
+    cat_vals <- NULL
+  }
+
+  summary_rows <- lapply(assay_cols, function(assay){
+    in_assay <- ct[ct[[assay]]==TRUE,,drop=FALSE]
+    row <- data.frame(assay=assay,
+                      n_samples=nrow(in_assay),
+                      n_patients=length(unique(in_assay$Patient_ID)),
+                      stringsAsFactors=FALSE)
+    for(tp in timepoints){
+      row[[paste0("n_",tp)]] <- sum(in_assay$Timepoint==tp, na.rm=TRUE)
+    }
+    if(!is.null(cat_vals)){
+      for(cv in cat_vals){
+        row[[paste0("n_",cv)]] <- sum(in_assay[[category_col]]==cv, na.rm=TRUE)
+      }
+    }
+    row
+  })
+  summary_table <- do.call(rbind, summary_rows)
+
+  patient_ids <- sort(unique(ct$Patient_ID))
+  per_patient_rows <- lapply(patient_ids, function(pid){
+    ps <- ct[ct$Patient_ID==pid,,drop=FALSE]
+    row <- data.frame(Patient_ID=pid, stringsAsFactors=FALSE)
+    for(assay in assay_cols){
+      avail <- ps$Sample_ID[ps[[assay]]==TRUE]
+      row[[assay]] <- if(length(avail)==0) NA_character_ else paste(avail, collapse=";")
+    }
+    row
+  })
+  per_patient_table <- do.call(rbind, per_patient_rows)
+
+  obj@output$sample_availability <- list(summary=summary_table, per_patient=per_patient_table)
+  obj@log=paste(obj@log,"\n\n",Sys.time(),";\n\t",log,sep="")
+  if(save_analysis){
+    if(missing(output_dir)){
+      output_dir<-file.path(obj@project,obj@analysis_name)
+      if(!dir.exists(output_dir)){dir.create(output_dir,recursive=T)}
+    }
+    write.csv(summary_table, file.path(output_dir,"sample_availability_summary.csv"), row.names=F, quote=F)
+    write.csv(per_patient_table, file.path(output_dir,"sample_availability_per_patient.csv"), row.names=F, quote=F)
+    cat(obj@log, file=file.path(output_dir,"log.txt"))
+  }
+  return(obj)
+})
+
+#' runSwimmerPlotAnalysis
+#' Produce a per-patient swimmer plot from clinical columns in patient_info.
+#'
+#' All column arguments other than \code{os_weeks_col} are optional. Layers are
+#' added only when the corresponding column is supplied, so the function works
+#' with any subset of PFS, OS, vital status, best response (RECIST or irRECIST),
+#' progression flag, and clinical-benefit data.
+#'
+#' @param obj Analysis. Analysis object.
+#' @param patient_id_col character. Column in patient_info holding patient IDs
+#'   (default "Patient_ID").
+#' @param cohort_col character or NULL. Column for cohort grouping (bracket
+#'   labels). NULL -> all patients in one block.
+#' @param os_weeks_col character. REQUIRED. Duration from treatment start to
+#'   last follow-up or death (weeks). Drives the grey bar length and ordering.
+#' @param pfs_weeks_col character or NULL. Duration to first progression or last
+#'   response assessment (weeks). Used for the response marker x position when
+#'   the patient progressed.
+#' @param treatment_weeks_col character or NULL. Duration on treatment (weeks).
+#'   Draws a filled overlay.
+#' @param vital_status_col character or NULL. Alive/deceased column.
+#' @param alive_value character. Value meaning alive (default "Alive").
+#' @param deceased_value character. Value meaning deceased (default "Deceased").
+#' @param best_response_col character or NULL. Best-response category column
+#'   (e.g. irCR/irPR/irSD/irPD or CR/PR/SD/PD).
+#' @param response_levels character or NULL. Ordered levels for best_response_col.
+#' @param response_colors named character or NULL. Fill colours keyed by response
+#'   level; NULL uses a built-in palette.
+#' @param progressed_col character or NULL. Progression flag column (e.g. "Yes"/"No").
+#' @param progressed_value character. Value meaning progressed (default "Yes").
+#' @param clinical_benefit_col character or NULL. Clinical-benefit column (e.g. CB/NCB).
+#'   NULL -> omitted.
+#' @param cb_value character. Clinical-benefit value (default "CB").
+#' @param ncb_value character. No-clinical-benefit value (default "NCB").
+#' @param cb_only logical. Filter to cb_value patients only (default FALSE).
+#' @param arrow_len numeric. Arrow extension in weeks for alive on-treatment
+#'   patients (default 2).
+#' @param bar_half numeric. Half-height of each patient bar (default 0.30).
+#' @param save_analysis logical. Write SVG to output_dir (default FALSE).
+#' @param output_dir character. Output directory; defaults to project/analysis_name.
+#' @param log character. Description appended to analysis log.
+#'
+#' @return Analysis. obj@output[["swimmer_plot"]] is a ggplot object.
+#' @export
+setGeneric("runSwimmerPlotAnalysis", function(
+    obj,
+    patient_id_col       = "Patient_ID",
+    cohort_col           = NULL,
+    os_weeks_col,
+    pfs_weeks_col        = NULL,
+    treatment_weeks_col  = NULL,
+    vital_status_col     = NULL,
+    alive_value          = "Alive",
+    deceased_value       = "Deceased",
+    best_response_col    = NULL,
+    response_levels      = NULL,
+    response_colors      = NULL,
+    progressed_col       = NULL,
+    progressed_value     = "Yes",
+    clinical_benefit_col = NULL,
+    cb_value             = "CB",
+    ncb_value            = "NCB",
+    cb_only              = FALSE,
+    arrow_len            = 2,
+    bar_half             = 0.30,
+    save_analysis        = FALSE,
+    output_dir,
+    log = "run swimmer plot analysis."
+  ) standardGeneric("runSwimmerPlotAnalysis"))
+
+setMethod("runSwimmerPlotAnalysis", "Analysis", function(
+    obj,
+    patient_id_col       = "Patient_ID",
+    cohort_col           = NULL,
+    os_weeks_col,
+    pfs_weeks_col        = NULL,
+    treatment_weeks_col  = NULL,
+    vital_status_col     = NULL,
+    alive_value          = "Alive",
+    deceased_value       = "Deceased",
+    best_response_col    = NULL,
+    response_levels      = NULL,
+    response_colors      = NULL,
+    progressed_col       = NULL,
+    progressed_value     = "Yes",
+    clinical_benefit_col = NULL,
+    cb_value             = "CB",
+    ncb_value            = "NCB",
+    cb_only              = FALSE,
+    arrow_len            = 2,
+    bar_half             = 0.30,
+    save_analysis        = FALSE,
+    output_dir,
+    log = "run swimmer plot analysis."
+  ) {
+
+  pi <- obj@experiment@patient_info
+  stopifnot(
+    "patient_info is empty"              = is.data.frame(pi) && nrow(pi) > 0,
+    "`os_weeks_col` not in patient_info" = os_weeks_col %in% names(pi)
+  )
+
+  if (save_analysis && missing(output_dir)) {
+    output_dir <- file.path(obj@project, obj@analysis_name)
+    if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+  }
+
+  p <- utiltools::plot_swimmer(
+    df                   = pi,
+    patient_id_col       = patient_id_col,
+    cohort_col           = cohort_col,
+    os_weeks_col         = os_weeks_col,
+    pfs_weeks_col        = pfs_weeks_col,
+    treatment_weeks_col  = treatment_weeks_col,
+    vital_status_col     = vital_status_col,
+    alive_value          = alive_value,
+    deceased_value       = deceased_value,
+    best_response_col    = best_response_col,
+    response_levels      = response_levels,
+    response_colors      = response_colors,
+    progressed_col       = progressed_col,
+    progressed_value     = progressed_value,
+    clinical_benefit_col = clinical_benefit_col,
+    cb_value             = cb_value,
+    ncb_value            = ncb_value,
+    cb_only              = cb_only,
+    arrow_len            = arrow_len,
+    bar_half             = bar_half
+  )
+
+  obj@output[["swimmer_plot"]] <- p
+  obj@log <- paste(obj@log, "\n\n", Sys.time(), ";\n\t", log, sep = "")
+
+  if (save_analysis) {
+    svglite::svglite(file.path(output_dir, "swimmer_plot.svg"),
+                     width = 12, height = max(8, nrow(pi) * 0.28))
+    print(p)
+    grDevices::dev.off()
+    cat(obj@log, file = file.path(output_dir, "log.txt"))
+  }
+
+  return(obj)
+})
+})
